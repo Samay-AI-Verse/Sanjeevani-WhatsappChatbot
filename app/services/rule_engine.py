@@ -82,6 +82,9 @@ class RuleEngine:
 
         # 2. General / Ordering Phase
         if current_state == ConversationState.GREETING:
+            if intent == "GREETING":
+                return ConversationState.GREETING, temp_data, "welcome_user"
+                
             if intent == "ORDER_MEDICINE" and items:
                 medicine = items[0]
                 if medicine.name:
@@ -110,7 +113,8 @@ class RuleEngine:
 
         if current_state == ConversationState.CONFIRM_ORDER:
             if intent == "CONFIRM":
-                return ConversationState.FINALIZE_ORDER, temp_data, "finalize_order"
+                # Immediately return them to GREETING state for their next message
+                return ConversationState.GREETING, temp_data, "finalize_order"
             if intent == "CANCEL":
                 return ConversationState.GREETING, temp_data, "order_cancelled"
             return ConversationState.CONFIRM_ORDER, temp_data, "ask_order_confirmation_again"
