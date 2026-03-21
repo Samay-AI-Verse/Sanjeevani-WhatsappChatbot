@@ -113,12 +113,49 @@ class RuleEngine:
 
         if current_state == ConversationState.CONFIRM_ORDER:
             if intent == "CONFIRM":
-                # Immediately return them to GREETING state for their next message
-                return ConversationState.GREETING, temp_data, "finalize_order"
+                return ConversationState.COLLECT_ADDRESS_SELECTION, temp_data, "ask_address_selection"
             if intent == "CANCEL":
                 return ConversationState.GREETING, temp_data, "order_cancelled"
             return ConversationState.CONFIRM_ORDER, temp_data, "ask_order_confirmation_again"
+
+        # 3. Address Collection Phase
+        if current_state == ConversationState.COLLECT_ADDRESS_SELECTION:
+            # We handle address selection via buttons in routes/handlers normally
+            return ConversationState.COLLECT_ADDRESS_SELECTION, temp_data, "ask_address_selection"
             
+        if current_state == ConversationState.COLLECT_ADDRESS_LINE1:
+            if "address_info" not in temp_data: temp_data["address_info"] = {}
+            temp_data["address_info"]["address_line1"] = user_text
+            return ConversationState.COLLECT_ADDRESS_LINE2, temp_data, "ask_address_line2"
+            
+        if current_state == ConversationState.COLLECT_ADDRESS_LINE2:
+            if user_text.lower() != "skip":
+                temp_data["address_info"]["address_line2"] = user_text
+            return ConversationState.COLLECT_ADDRESS_CITY, temp_data, "ask_city"
+            
+        if current_state == ConversationState.COLLECT_ADDRESS_CITY:
+            temp_data["address_info"]["city"] = user_text
+            return ConversationState.COLLECT_ADDRESS_STATE, temp_data, "ask_state"
+            
+        if current_state == ConversationState.COLLECT_ADDRESS_STATE:
+            temp_data["address_info"]["state"] = user_text
+            return ConversationState.COLLECT_ADDRESS_PINCODE, temp_data, "ask_pincode"
+            
+        if current_state == ConversationState.COLLECT_ADDRESS_PINCODE:
+            import re
+            if re.match(r"^\d{6}$", user_text.strip()):
+                temp_data["address_info"]["pincode"] = user_text.strip()
+                return ConversationState.COLLECT_ADDRESS_LANDMARK, temp_data, "ask_landmark"
+            return ConversationState.COLLECT_ADDRESS_PINCODE, temp_data, "ask_pincode_again"
+            
+        if current_state == ConversationState.COLLECT_ADDRESS_LANDMARK:
+            if user_text.lower() != "skip":
+                temp_data["address_info"]["landmark"] = user_text
+            return ConversationState.CONFIRM_SAVED_ADDRESS, temp_data, "ask_save_address"
+            
+        if current_state == ConversationState.FINALIZE_ORDER:
+            return ConversationState.GREETING, {}, "finalize_order"
+
         # Default safety net
         return ConversationState.GREETING, temp_data, "fallback_general"
 

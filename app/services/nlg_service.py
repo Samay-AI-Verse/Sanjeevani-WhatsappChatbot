@@ -5,6 +5,11 @@ from ..services.whatsapp import send_whatsapp_text as send_twilio_text, send_wha
 from ..services.whatsapp_meta import send_whatsapp_text_meta, send_whatsapp_buttons_meta
 from ..services.ai_service import get_conversational_reply
 
+def format_address_string(address: Dict) -> str:
+    parts = [address.get(k) for k in ["address_line1", "address_line2", "city", "state", "pincode"] if address.get(k)]
+    if address.get("landmark"): parts.insert(2, f"Near {address['landmark']}")
+    return ", ".join(parts)
+
 def generate_and_send_response(to_number: str, backend_command: str, user_profile: Dict, temp_data: Dict, recent_orders: list = None, provider: str = "twilio", user_text: str = ""):
     """
     NLG Service equivalent. Using hardcoded templates for MVP stability, 
@@ -17,6 +22,16 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
     def send_buttons(num, txt, btns):
         if provider == "meta": return send_whatsapp_buttons_meta(num, txt, btns)
         else: return send_twilio_buttons(num, txt, btns)
+        
+    def send_list(num, txt, title, items):
+        if provider == "meta":
+            # Meta supports List Messages
+            from ..services.whatsapp_meta import send_whatsapp_list_meta
+            return send_whatsapp_list_meta(num, txt, title, items)
+        else:
+            # Twilio fallback to buttons if too many, or just text
+            btn_txt = f"{txt}\n\n" + "\n".join([f"• {i['title']}" for i in items])
+            return send_text(num, btn_txt)
     
     # Default to English if not set
     language = user_profile.get("language", "English").lower()
@@ -64,7 +79,7 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
         if language == "hindi":
             msg = f"नमस्ते {name}, संजीवनी केयर में आपका स्वागत है। 🙏 मैं आपकी कैसे मदद कर सकता हूँ? \n\nआप दवा मंगवा सकते हैं या अपना ऑर्डर ट्रैक कर सकते हैं। 💊"
         elif language == "marathi":
-            msg = f"नमस्कार {name}, संजीवनी केअरमध्ये आपले स्वागत आहे. 🙏 मी तुमची कशी मदत करू शकतो? \n\nतुम्ही औषध ऑर्डर करू शकता किंवा तुमचा ऑर्डर मागोवा घेऊ शकता. 💊"
+            msg = f"नमस्कार {name}, संजीवनी केअरमध्ये आपले स्वागत आहे। 🙏 मी तुमची कशी मदत करू शकतो? \n\nतुम्ही औषध ऑर्डर करू शकता किंवा तुमचा ऑर्डर मागोवा घेऊ शकता। 💊"
         else:
             msg = f"Hello {name}, welcome back to Sanjeevani Care! 🙏 How can I help you today?\n\nYou can order medicines or track your existing order. 💊"
         send_text(to_number, msg)
@@ -83,19 +98,73 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
         price = temp_data.get("price", 250)
         total = int(qty) * price
         
-        summary = f"✨ *Order Summary* ✨\n--------------------------\n💊 *Medicine:* {med}\n📊 *Quantity:* {qty}\n💰 *Estimated Price:* ₹{total}\n🚚 *Delivery:* Pharmacy Pick-up\n--------------------------\n*Would you like me to confirm this order for you?*"
+        summary = f"✨ *Order Summary* ✨\n--------------------------\n💊 *Medicine:* {med}\n📊 *Quantity:* {qty}\n💰 *Estimated Price:* ₹{total}\n🚚 *Delivery:* Home Delivery\n--------------------------\n*Confirm your medicine details?*"
         
         buttons = [
-            {"id": "confirm_order", "title": "✅ Confirm Order"},
+            {"id": "confirm_order", "title": "✅ Confirm & Set Address"},
             {"id": "cancel_order", "title": "❌ Cancel"}
         ]
         send_buttons(to_number, summary, buttons)
         return
 
+    # --- ADDRESS COLLECTION ---
+    if backend_command == "ask_address_selection":
+        # Check if we have addresses in temp_data (passed from route)
+        addresses = temp_data.get("available_addresses", [])
+        if addresses:
+            msg = "📍 Please select a delivery address or add a new one:" if language == "english" else "📍 कृपया डिलीवरी पता चुनें या नया जोड़ें:"
+            items = []
+            for i, addr in enumerate(addresses[:3]):
+                items.append({"id": f"addr_select_{i}", "title": f"{addr.get('address_type', 'Home')}: {addr['address_line1'][:20]}"})
+            items.append({"id": "addr_new", "title": "➕ Add New Address"})
+            send_list(to_number, msg, "Delivery Addresses", items)
+        else:
+            msg = "🏠 Please enter your *Address Line 1* (Street, building, etc.):" if language == "english" else "🏠 कृपया अपना *पता लाइन 1* (सड़क, इमारत, आदि) दर्ज करें:"
+            send_text(to_number, msg)
+        return
+
+    if backend_command == "ask_address_line2":
+        msg = "Enter *Address Line 2* (Area/locality) or type 'Skip':" if language == "english" else "*पता लाइन 2* (क्षेत्र/इलाका) दर्ज करें या 'Skip' लिखें:"
+        send_text(to_number, msg)
+        return
+
+    if backend_command == "ask_city":
+        msg = "Enter your *City*:" if language == "english" else "अपना *शहर* दर्ज करें:"
+        send_text(to_number, msg)
+        return
+
+    if backend_command == "ask_state":
+        msg = "Enter your *State*:" if language == "english" else "अपना *राज्य* दर्ज करें:"
+        send_text(to_number, msg)
+        return
+
+    if backend_command in ["ask_pincode", "ask_pincode_again"]:
+        if backend_command == "ask_pincode_again":
+            msg = "❌ Invalid pincode. Please enter 6 digits:" if language == "english" else "❌ गलत पिनकोड। कृपया 6 अंक दर्ज करें:"
+        else:
+            msg = "Enter your *Pincode* (6 digits):" if language == "english" else "अपना *पिनकोड* (6 अंक) दर्ज करें:"
+        send_text(to_number, msg)
+        return
+
+    if backend_command == "ask_landmark":
+        msg = "Enter a *Landmark* (Optional) or type 'Skip':" if language == "english" else "एक *लैंडमार्क* (वैकल्पिक) दर्ज करें या 'Skip' लिखें:"
+        send_text(to_number, msg)
+        return
+
+    if backend_command == "ask_save_address":
+        address_str = format_address_string(temp_data.get("address_info", {}))
+        msg = f"📍 *Confirm Delivery Address:*\n\n{address_str}\n\nWould you like to save this for future orders?" if language == "english" else f"📍 *डिलीवरी पता पुष्ट करें:*\n\n{address_str}\n\nक्या आप इसे भविष्य के लिए सुरक्षित करना चाहेंगे?"
+        buttons = [
+            {"id": "save_addr_yes", "title": "Yes, Save / हाँ"},
+            {"id": "save_addr_no", "title": "No, Use Once / नहीं"}
+        ]
+        send_buttons(to_number, msg, buttons)
+        return
+
     if backend_command == "finalize_order":
-        # In a real app, the DB creation creates the ID first. We assume the route handles the DB creation and passes the ID.
         order_id = temp_data.get("order_id", "PENDING")
-        msg = f"🙌 *Order Confirmed!*\n\nThank you, {name}. Your order has been placed successfully.\n\n🆔 *Order ID:* #{order_id}\n📍 *Status:* Being Processed\n\nWe will notify you once it's ready for pick-up. Stay healthy! ✨"
+        address_str = format_address_string(temp_data.get("address_info", {}))
+        msg = f"🙌 *Order Confirmed!*\n\nThank you, {name}. Your order has been placed successfully.\n\n🆔 *Order ID:* #{order_id}\n📍 *Status:* Being Processed\n🚚 *Delivering to:* {address_str}\n\nStay healthy! ✨"
         send_text(to_number, msg)
         return
 
@@ -108,6 +177,21 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
     if backend_command == "show_tracking":
         if not recent_orders:
             send_text(to_number, "No recent orders found.")
+        else:
+            order_list = "\n\n".join([f"📦 *ID:* {o['order_id']}\n💊 *Item:* {o['medicine_name']}\n📊 *Status:* {o['status'].title()}" for o in recent_orders])
+            send_text(to_number, f"Here are your recent orders:\n\n{order_list}")
+        return
+
+    # --- GENERAL (Conversational Chatbot Fallback) ---
+    if backend_command in ["general_greeting_or_fallback", "fallback_general"]:
+        msg = get_conversational_reply(user_text, user_profile)
+        send_text(to_number, msg)
+        return
+        
+    if backend_command == "acknowledge_cancel":
+        send_text(to_number, "Okay, no problem. How else can I help?")
+        return
+to_number, "No recent orders found.")
         else:
             order_list = "\n\n".join([f"📦 *ID:* {o['order_id']}\n💊 *Item:* {o['medicine_name']}\n📊 *Status:* {o['status'].title()}" for o in recent_orders])
             send_text(to_number, f"Here are your recent orders:\n\n{order_list}")

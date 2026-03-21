@@ -89,47 +89,81 @@ async def handle_message(request: Request):
     nlu_result = extract_nlu(user_text, current_state)
     logger.info(f"🧠 NLU Result: {nlu_result.model_dump_json()}")
 
-    # 3. Rule Engine Decision
-    new_state, new_temp, backend_command = RuleEngine.process(
-        nlu_result=nlu_result,
-        current_state=current_state,
-        user_profile=profile,
-        temp_data=temp_data,
-        user_text=user_text
-    )
+    # --- INTERACTIVE BUTTON INTERCEPTS ---
+    backend_command = None
+    new_state = None
+    new_temp = temp_data.copy()
+
+    if interactive_data:
+        if interactive_data == "confirm_order":
+            new_state = ConversationState.COLLECT_ADDRESS_SELECTION
+            backend_command = "ask_address_selection"
+        elif interactive_data == "addr_new":
+            new_state = ConversationState.COLLECT_ADDRESS_LINE1
+            backend_command = "ask_address_selection" # Fallback to prompt line 1
+        elif interactive_data.startswith("addr_select_"):
+            idx = int(interactive_data.split("_")[-1])
+            addresses = await get_user_addresses(user_number)
+            if idx < len(addresses):
+                selected = {k: v for k, v in addresses[idx].items() if k != '_id'}
+                new_temp["address_info"] = selected
+                new_state = ConversationState.FINALIZE_ORDER
+                backend_command = "finalize_order"
+        elif interactive_data == "save_addr_yes":
+            await save_user_address(user_number, temp_data.get("address_info", {}))
+            new_state = ConversationState.FINALIZE_ORDER
+            backend_command = "finalize_order"
+        elif interactive_data == "save_addr_no":
+            new_state = ConversationState.FINALIZE_ORDER
+            backend_command = "finalize_order"
+
+    # 3. Rule Engine Decision (if not already intercepted by button)
+    if not backend_command:
+        new_state, new_temp, backend_command = RuleEngine.process(
+            nlu_result=nlu_result,
+            current_state=current_state,
+            user_profile=profile,
+            temp_data=temp_data,
+            user_text=user_text
+        )
     logger.info(f"🚦 Rule Engine: state -> {new_state}, cmd -> {backend_command}")
 
     # 4. Handle DB side-effects based on backend_command
-    # Update profile fields ONLY if user is explicitly providing info
     if nlu_result.intent == "PROVIDE_INFO" and any(vars(nlu_result.extracted_user_fields).values()):
         await update_user_profile(user_number, nlu_result.extracted_user_fields.model_dump(exclude_none=True))
-        profile = await get_user_profile(user_number) # Reload to get names for NLG
+        profile = await get_user_profile(user_number)
 
     recent_orders = []
     if backend_command == "show_tracking":
         recent_orders = await get_recent_orders(user_number)
 
+    if backend_command == "ask_address_selection" and new_state == ConversationState.COLLECT_ADDRESS_SELECTION:
+        addresses = await get_user_addresses(user_number)
+        new_temp["available_addresses"] = [{k: v for k, v in a.items() if k != '_id'} for a in addresses]
+
     order_id = None
     if backend_command == "finalize_order":
+        from ..services.nlg_service import format_address_string
+        address_info = new_temp.get("address_info", {})
         order_data = {
             "medicine_name": new_temp.get("medicine_name"),
             "quantity": new_temp.get("quantity"),
-            "price": new_temp.get("price", 250), # Hardcoded MVP price
+            "price": new_temp.get("price", 250),
+            "delivery_address": format_address_string(address_info) if address_info else "Pending",
         }
         order_id = await create_order(user_number, order_data)
         new_temp["order_id"] = order_id
-        # Clearing temp data since order is done
-        new_temp = {}
+        # Note: We keep new_temp for NLG to see order_id and address_info, but clear state after
 
     # 5. Save updated state memory
-    await update_conversation_state(user_number, new_state, new_temp)
+    if backend_command == "finalize_order":
+        # Clear state after finalization
+        await update_conversation_state(user_number, ConversationState.GREETING, {})
+    else:
+        await update_conversation_state(user_number, new_state, new_temp)
 
     # 6. Generate Response (NLG) and send
-    # Pass the temp_data before it was cleared if we are finalizing, so NLG can use the order_id
-    resp_temp_data = temp_data if backend_command != "finalize_order" else {"order_id": order_id}
-    if backend_command == "ask_order_confirmation":
-        resp_temp_data = new_temp # need updated temp data to show summary
-
+    resp_temp_data = new_temp
     generate_and_send_response(user_number, backend_command, profile, resp_temp_data, recent_orders, provider="twilio", user_text=user_text)
 
     return {"status": "success"}
@@ -216,12 +250,43 @@ async def handle_meta_message(request: Request):
 
     temp_data = state_doc.get("temp_data", {})
     nlu_result = extract_nlu(user_text, current_state)
-    new_state, new_temp, backend_command = RuleEngine.process(
-        nlu_result=nlu_result, current_state=current_state,
-        user_profile=profile, temp_data=temp_data, user_text=user_text
-    )
+    
+    # --- INTERACTIVE BUTTON INTERCEPTS ---
+    backend_command = None
+    new_state = None
+    new_temp = temp_data.copy()
 
-    # Update profile fields ONLY if user is explicitly providing info
+    if interactive_data:
+        if interactive_data == "confirm_order":
+            new_state = ConversationState.COLLECT_ADDRESS_SELECTION
+            backend_command = "ask_address_selection"
+        elif interactive_data == "addr_new":
+            new_state = ConversationState.COLLECT_ADDRESS_LINE1
+            backend_command = "ask_address_selection"
+        elif interactive_data.startswith("addr_select_"):
+            idx = int(interactive_data.split("_")[-1])
+            addresses = await get_user_addresses(user_number)
+            if idx < len(addresses):
+                selected = {k: v for k, v in addresses[idx].items() if k != '_id'}
+                new_temp["address_info"] = selected
+                new_state = ConversationState.FINALIZE_ORDER
+                backend_command = "finalize_order"
+        elif interactive_data == "save_addr_yes":
+            await save_user_address(user_number, temp_data.get("address_info", {}))
+            new_state = ConversationState.FINALIZE_ORDER
+            backend_command = "finalize_order"
+        elif interactive_data == "save_addr_no":
+            new_state = ConversationState.FINALIZE_ORDER
+            backend_command = "finalize_order"
+
+    # 3. Rule Engine Decision
+    if not backend_command:
+        new_state, new_temp, backend_command = RuleEngine.process(
+            nlu_result=nlu_result, current_state=current_state,
+            user_profile=profile, temp_data=temp_data, user_text=user_text
+        )
+
+    # 4. Handle DB side-effects based on backend_command
     if nlu_result.intent == "PROVIDE_INFO" and any(vars(nlu_result.extracted_user_fields).values()):
         await update_user_profile(user_number, nlu_result.extracted_user_fields.model_dump(exclude_none=True))
         profile = await get_user_profile(user_number)
@@ -230,18 +295,30 @@ async def handle_meta_message(request: Request):
     if backend_command == "show_tracking":
         recent_orders = await get_recent_orders(user_number)
 
+    if backend_command == "ask_address_selection" and new_state == ConversationState.COLLECT_ADDRESS_SELECTION:
+        addresses = await get_user_addresses(user_number)
+        new_temp["available_addresses"] = [{k: v for k, v in a.items() if k != '_id'} for a in addresses]
+
     order_id = None
     if backend_command == "finalize_order":
-        order_data = {"medicine_name": new_temp.get("medicine_name"), "quantity": new_temp.get("quantity"), "price": 250}
+        from ..services.nlg_service import format_address_string
+        address_info = new_temp.get("address_info", {})
+        order_data = {
+            "medicine_name": new_temp.get("medicine_name"), 
+            "quantity": new_temp.get("quantity"), 
+            "price": 250,
+            "delivery_address": format_address_string(address_info) if address_info else "Pending",
+        }
         order_id = await create_order(user_number, order_data)
-        new_temp = {}
+        new_temp["order_id"] = order_id
 
-    await update_conversation_state(user_number, new_state, new_temp)
+    # 5. Save updated state memory
+    if backend_command == "finalize_order":
+        await update_conversation_state(user_number, ConversationState.GREETING, {})
+    else:
+        await update_conversation_state(user_number, new_state, new_temp)
 
-    resp_temp_data = temp_data if backend_command != "finalize_order" else {"order_id": order_id}
-    if backend_command == "ask_order_confirmation":
-        resp_temp_data = new_temp
-
+    resp_temp_data = new_temp
     # Important: Tell NLG Service to use META as the provider!
     generate_and_send_response(user_number, backend_command, profile, resp_temp_data, recent_orders, provider="meta", user_text=user_text)
 
