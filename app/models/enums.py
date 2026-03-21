@@ -13,6 +13,7 @@ class ConversationState(str, Enum):
     
     # Address Collection
     COLLECT_ADDRESS_SELECTION = "collect_address_selection"
+    COLLECT_FULL_ADDRESS = "collect_full_address"
     COLLECT_ADDRESS_LINE1 = "collect_address_line1"
     COLLECT_ADDRESS_LINE2 = "collect_address_line2"
     COLLECT_ADDRESS_CITY = "collect_address_city"

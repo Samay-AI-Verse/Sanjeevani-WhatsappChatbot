@@ -49,8 +49,18 @@ class RuleEngine:
         if current_state == ConversationState.COLLECT_NAME:
             if fields.name:
                 return ConversationState.COLLECT_GENDER, temp_data, "ask_gender"
-            if len(user_text.split()) > 0 and intent != "UNKNOWN":
-                nlu_result.extracted_user_fields.name = user_text.strip()
+            
+            # Filter out likely button clicks or common non-name inputs
+            clean_text = user_text.strip()
+            lower_text = clean_text.lower()
+            button_labels = ["male", "female", "other", "english", "hindi", "marathi", "पुरुष", "महिला", "अन्य", "हिंदी", "मराठी"]
+            
+            if any(label in lower_text for label in button_labels) and len(clean_text.split()) <= 3:
+                # If it looks like a button label, ignore it as a name
+                return ConversationState.COLLECT_NAME, temp_data, "ask_name_again"
+
+            if len(clean_text.split()) > 0 and intent != "UNKNOWN":
+                nlu_result.extracted_user_fields.name = clean_text
                 return ConversationState.COLLECT_GENDER, temp_data, "ask_gender"
             return ConversationState.COLLECT_NAME, temp_data, "ask_name_again"
 
@@ -120,9 +130,18 @@ class RuleEngine:
 
         # 3. Address Collection Phase
         if current_state == ConversationState.COLLECT_ADDRESS_SELECTION:
-            # We handle address selection via buttons in routes/handlers normally
+            if user_text and intent not in ["CANCEL", "TRACK_ORDER"]:
+                if "address_info" not in temp_data: temp_data["address_info"] = {}
+                temp_data["address_info"]["full_address"] = user_text
+                return ConversationState.FINALIZE_ORDER, temp_data, "finalize_order"
             return ConversationState.COLLECT_ADDRESS_SELECTION, temp_data, "ask_address_selection"
             
+        if current_state == ConversationState.COLLECT_FULL_ADDRESS:
+            if "address_info" not in temp_data: temp_data["address_info"] = {}
+            temp_data["address_info"]["full_address"] = user_text
+            # To keep it simple as requested, we go straight to finalization
+            return ConversationState.FINALIZE_ORDER, temp_data, "finalize_order"
+
         if current_state == ConversationState.COLLECT_ADDRESS_LINE1:
             if "address_info" not in temp_data: temp_data["address_info"] = {}
             temp_data["address_info"]["address_line1"] = user_text

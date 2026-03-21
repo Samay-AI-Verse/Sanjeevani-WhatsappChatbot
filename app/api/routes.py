@@ -99,8 +99,8 @@ async def handle_message(request: Request):
             new_state = ConversationState.COLLECT_ADDRESS_SELECTION
             backend_command = "ask_address_selection"
         elif interactive_data == "addr_new":
-            new_state = ConversationState.COLLECT_ADDRESS_LINE1
-            backend_command = "ask_address_selection" # Fallback to prompt line 1
+            new_state = ConversationState.COLLECT_FULL_ADDRESS
+            backend_command = "ask_full_address"
         elif interactive_data.startswith("addr_select_"):
             idx = int(interactive_data.split("_")[-1])
             addresses = await get_user_addresses(user_number)
@@ -261,8 +261,8 @@ async def handle_meta_message(request: Request):
             new_state = ConversationState.COLLECT_ADDRESS_SELECTION
             backend_command = "ask_address_selection"
         elif interactive_data == "addr_new":
-            new_state = ConversationState.COLLECT_ADDRESS_LINE1
-            backend_command = "ask_address_selection"
+            new_state = ConversationState.COLLECT_FULL_ADDRESS
+            backend_command = "ask_full_address"
         elif interactive_data.startswith("addr_select_"):
             idx = int(interactive_data.split("_")[-1])
             addresses = await get_user_addresses(user_number)

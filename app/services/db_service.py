@@ -65,6 +65,7 @@ async def save_user_address(phone: str, address_data: Dict) -> str:
 
     address = {
         "user_id": phone,
+        "full_address": address_data.get("full_address"),
         "address_line1": address_data.get("address_line1"),
         "address_line2": address_data.get("address_line2"),
         "city": address_data.get("city"),

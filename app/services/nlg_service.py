@@ -6,6 +6,8 @@ from ..services.whatsapp_meta import send_whatsapp_text_meta, send_whatsapp_butt
 from ..services.ai_service import get_conversational_reply
 
 def format_address_string(address: Dict) -> str:
+    if address.get("full_address"):
+        return address["full_address"]
     parts = [address.get(k) for k in ["address_line1", "address_line2", "city", "state", "pincode"] if address.get(k)]
     if address.get("landmark"): parts.insert(2, f"Near {address['landmark']}")
     return ", ".join(parts)
@@ -71,17 +73,17 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
         return
 
     if backend_command == "registration_complete":
-        msg = f"🎉 *Registration Complete!*\n\n🌟 *Welcome to Sanjeevani Care, {name}!* 🌟\n\nYour trusted pharmacy partner. ⚕️\n\nHow can I help you today?\n👉 *'I want to order Paracetamol'*\n👉 *'Track my order'* "
+        msg = f"✨ *Welcome Aboard, {name}!* ✨\n\n🎉 *Registration Successful!*\nYour trusted pharmacy partner is now just a text away. ⚕️\n\n🌟 *Let's get started:* \n👉 Type *'Order Paracetamol'* \n👉 Type *'Track Order'* \n\nHow else can I help you today? 🙏"
         send_text(to_number, msg)
         return
 
     if backend_command == "welcome_user":
         if language == "hindi":
-            msg = f"नमस्ते {name}, संजीवनी केयर में आपका स्वागत है। 🙏 मैं आपकी कैसे मदद कर सकता हूँ? \n\nआप दवा मंगवा सकते हैं या अपना ऑर्डर ट्रैक कर सकते हैं। 💊"
+            msg = f"✨ *संजीवनी केयर में आपका स्वागत है, {name}!* ✨\n\n🙏 आपकी सेवा में फिर से हाज़िर हैं। हम आज आपकी किस प्रकार मदद कर सकते हैं? \n\n💊 *दवा मंगवाएं* या अपना *ऑर्डर ट्रैक करें*। बस हमें बताएं!"
         elif language == "marathi":
-            msg = f"नमस्कार {name}, संजीवनी केअरमध्ये आपले स्वागत आहे। 🙏 मी तुमची कशी मदत करू शकतो? \n\nतुम्ही औषध ऑर्डर करू शकता किंवा तुमचा ऑर्डर मागोवा घेऊ शकता। 💊"
+            msg = f"✨ *संजीवनी केअरमध्ये आपले स्वागत आहे, {name}!* ✨\n\n🙏 पुन्हा तुमची सेवा करण्यास आम्हाला आनंद होत आहे। आज आम्ही तुमची कशी मदत करू शकतो? \n\n💊 *औषध ऑर्डर करा* किंवा तुमच्या *ऑर्डरचा मागोवा घ्या*। बस आम्हाला सांगा!"
         else:
-            msg = f"Hello {name}, welcome back to Sanjeevani Care! 🙏 How can I help you today?\n\nYou can order medicines or track your existing order. 💊"
+            msg = f"✨ *Welcome Back, {name}!* ✨\n\n🙏 Good to see you again. How can we help you stay healthy today?\n\nYou can *order medicines* or *track your current orders*. 💊"
         send_text(to_number, msg)
         return
 
@@ -119,8 +121,13 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
             items.append({"id": "addr_new", "title": "➕ Add New Address"})
             send_list(to_number, msg, "Delivery Addresses", items)
         else:
-            msg = "🏠 Please enter your *Address Line 1* (Street, building, etc.):" if language == "english" else "🏠 कृपया अपना *पता लाइन 1* (सड़क, इमारत, आदि) दर्ज करें:"
+            msg = "🏠 Please enter your *Full Delivery Address* (Street, Area, City, etc.):" if language == "english" else "🏠 कृपया अपना *पूरा डिलीवरी पता* (सड़क, इलाका, शहर, आदि) दर्ज करें:"
             send_text(to_number, msg)
+        return
+
+    if backend_command == "ask_full_address":
+        msg = "🏠 Please enter your *Full Delivery Address* (Street, Area, City, etc.):" if language == "english" else "🏠 कृपया अपना *पूरा डिलीवरी पता* (सड़क, इलाका, शहर, आदि) दर्ज करें:"
+        send_text(to_number, msg)
         return
 
     if backend_command == "ask_address_line2":
