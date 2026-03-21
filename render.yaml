@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: sanjeevani-ws-chatbot
+    env: docker
+    plan: free # Change to starter/pro if needed
+    region: ohio # Close to most LLM providers, change if needed
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_NUMBER
+        sync: false
+      - key: META_ACCESS_TOKEN
+        sync: false
+      - key: META_PHONE_NUMBER_ID
+        sync: false
+      - key: META_VERIFY_TOKEN
+        value: verify_me
+      - key: MONGODB_URL
+        sync: false
