@@ -182,20 +182,6 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
             send_text(to_number, f"Here are your recent orders:\n\n{order_list}")
         return
 
-    # --- GENERAL (Conversational Chatbot Fallback) ---
-    if backend_command in ["general_greeting_or_fallback", "fallback_general"]:
-        msg = get_conversational_reply(user_text, user_profile)
-        send_text(to_number, msg)
-        return
-        
-    if backend_command == "acknowledge_cancel":
-        send_text(to_number, "Okay, no problem. How else can I help?")
-        return
-to_number, "No recent orders found.")
-        else:
-            order_list = "\n\n".join([f"📦 *ID:* {o['order_id']}\n💊 *Item:* {o['medicine_name']}\n📊 *Status:* {o['status'].title()}" for o in recent_orders])
-            send_text(to_number, f"Here are your recent orders:\n\n{order_list}")
-        return
 
     # --- GENERAL (Conversational Chatbot Fallback) ---
     if backend_command in ["general_greeting_or_fallback", "fallback_general"]:
