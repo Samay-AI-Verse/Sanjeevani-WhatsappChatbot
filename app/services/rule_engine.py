@@ -72,12 +72,12 @@ class RuleEngine:
 
         if current_state == ConversationState.COLLECT_AGE:
             if fields.age is not None:
-                return ConversationState.GREETING, temp_data, "welcome_user"
+                return ConversationState.GREETING, temp_data, "registration_complete"
             import re
             nums = re.findall(r'\d+', user_text)
             if nums:
                 nlu_result.extracted_user_fields.age = int(nums[0])
-                return ConversationState.GREETING, temp_data, "welcome_user"
+                return ConversationState.GREETING, temp_data, "registration_complete"
             return ConversationState.COLLECT_AGE, temp_data, "ask_age_again"
 
         # 2. General / Ordering Phase

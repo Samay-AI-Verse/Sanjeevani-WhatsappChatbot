@@ -100,8 +100,8 @@ async def handle_message(request: Request):
     logger.info(f"🚦 Rule Engine: state -> {new_state}, cmd -> {backend_command}")
 
     # 4. Handle DB side-effects based on backend_command
-    # Update profile fields if provided by NLU
-    if any(vars(nlu_result.extracted_user_fields).values()):
+    # Update profile fields ONLY if user is explicitly providing info
+    if nlu_result.intent == "PROVIDE_INFO" and any(vars(nlu_result.extracted_user_fields).values()):
         await update_user_profile(user_number, nlu_result.extracted_user_fields.model_dump(exclude_none=True))
         profile = await get_user_profile(user_number) # Reload to get names for NLG
 
@@ -130,7 +130,7 @@ async def handle_message(request: Request):
     if backend_command == "ask_order_confirmation":
         resp_temp_data = new_temp # need updated temp data to show summary
 
-    generate_and_send_response(user_number, backend_command, profile, resp_temp_data, recent_orders, provider="twilio")
+    generate_and_send_response(user_number, backend_command, profile, resp_temp_data, recent_orders, provider="twilio", user_text=user_text)
 
     return {"status": "success"}
 
@@ -221,7 +221,8 @@ async def handle_meta_message(request: Request):
         user_profile=profile, temp_data=temp_data, user_text=user_text
     )
 
-    if any(vars(nlu_result.extracted_user_fields).values()):
+    # Update profile fields ONLY if user is explicitly providing info
+    if nlu_result.intent == "PROVIDE_INFO" and any(vars(nlu_result.extracted_user_fields).values()):
         await update_user_profile(user_number, nlu_result.extracted_user_fields.model_dump(exclude_none=True))
         profile = await get_user_profile(user_number)
 
@@ -242,6 +243,6 @@ async def handle_meta_message(request: Request):
         resp_temp_data = new_temp
 
     # Important: Tell NLG Service to use META as the provider!
-    generate_and_send_response(user_number, backend_command, profile, resp_temp_data, recent_orders, provider="meta")
+    generate_and_send_response(user_number, backend_command, profile, resp_temp_data, recent_orders, provider="meta", user_text=user_text)
 
     return {"status": "success"}

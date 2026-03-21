@@ -3,8 +3,9 @@ from typing import Dict
 from ..core.logger import logger
 from ..services.whatsapp import send_whatsapp_text as send_twilio_text, send_whatsapp_buttons as send_twilio_buttons
 from ..services.whatsapp_meta import send_whatsapp_text_meta, send_whatsapp_buttons_meta
+from ..services.ai_service import get_conversational_reply
 
-def generate_and_send_response(to_number: str, backend_command: str, user_profile: Dict, temp_data: Dict, recent_orders: list = None, provider: str = "twilio"):
+def generate_and_send_response(to_number: str, backend_command: str, user_profile: Dict, temp_data: Dict, recent_orders: list = None, provider: str = "twilio", user_text: str = ""):
     """
     NLG Service equivalent. Using hardcoded templates for MVP stability, 
     but can be swapped with a fast LLM generator if needed.
@@ -54,8 +55,18 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
         send_text(to_number, msg)
         return
 
-    if backend_command == "welcome_user":
+    if backend_command == "registration_complete":
         msg = f"🎉 *Registration Complete!*\n\n🌟 *Welcome to Sanjeevani Care, {name}!* 🌟\n\nYour trusted pharmacy partner. ⚕️\n\nHow can I help you today?\n👉 *'I want to order Paracetamol'*\n👉 *'Track my order'* "
+        send_text(to_number, msg)
+        return
+
+    if backend_command == "welcome_user":
+        if language == "hindi":
+            msg = f"नमस्ते {name}, संजीवनी केयर में आपका स्वागत है। 🙏 मैं आपकी कैसे मदद कर सकता हूँ? \n\nआप दवा मंगवा सकते हैं या अपना ऑर्डर ट्रैक कर सकते हैं। 💊"
+        elif language == "marathi":
+            msg = f"नमस्कार {name}, संजीवनी केअरमध्ये आपले स्वागत आहे. 🙏 मी तुमची कशी मदत करू शकतो? \n\nतुम्ही औषध ऑर्डर करू शकता किंवा तुमचा ऑर्डर मागोवा घेऊ शकता. 💊"
+        else:
+            msg = f"Hello {name}, welcome back to Sanjeevani Care! 🙏 How can I help you today?\n\nYou can order medicines or track your existing order. 💊"
         send_text(to_number, msg)
         return
 
@@ -102,14 +113,11 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
             send_text(to_number, f"Here are your recent orders:\n\n{order_list}")
         return
 
-    # --- GENERAL ---
-    if backend_command == "general_greeting_or_fallback":
-        msg = "How can I help you today? You can say things like 'Order Dolo' or 'Track my order'."
+    # --- GENERAL (Conversational Chatbot Fallback) ---
+    if backend_command in ["general_greeting_or_fallback", "fallback_general"]:
+        # Use our LLM specifically for casual chat
+        msg = get_conversational_reply(user_text, user_profile)
         send_text(to_number, msg)
-        return
-        
-    if backend_command == "fallback_general":
-        send_text(to_number, "Sorry, I didn't quite catch that. Could you repeat?")
         return
         
     if backend_command == "acknowledge_cancel":
