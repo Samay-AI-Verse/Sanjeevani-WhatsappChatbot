@@ -39,6 +39,13 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
     language = user_profile.get("language", "English").lower()
     name = user_profile.get("name", "")
     
+    # --- NAME SANITIZATION ---
+    # If the name looks like a gender label (common mistake during registration),
+    # replace it with a generic friendly term.
+    gender_labels = ["male", "female", "other", "पुरुष", "महिला", "अन्य"]
+    if any(label in name.lower() for label in gender_labels) and len(name.split()) <= 3:
+        name = "Friend" if language == "english" else ("दोस्त" if language == "hindi" else "मित्र")
+    
     # --- ONBOARDING ---
     if backend_command in ["ask_language", "ask_language_again"]:
         msg = "👋 *Welcome to Sanjeevani Care!* \n\n🌐 Which language do you prefer to chat in?"
@@ -171,7 +178,7 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
     if backend_command == "finalize_order":
         order_id = temp_data.get("order_id", "PENDING")
         address_str = format_address_string(temp_data.get("address_info", {}))
-        msg = f"🙌 *Order Confirmed!*\n\nThank you, {name}. Your order has been placed successfully.\n\n🆔 *Order ID:* #{order_id}\n📍 *Status:* Being Processed\n🚚 *Delivering to:* {address_str}\n\nStay healthy! ✨"
+        msg = f"🙌 *Order Confirmed!* \n\nThank you, *{name}*. Your order is being processed. 🚚\n\n🆔 *Order ID:* #{order_id}\n📍 *Status:* In Progress\n📍 *Delivering to:* {address_str}\n\nStay healthy! ✨"
         send_text(to_number, msg)
         return
 
