@@ -33,4 +33,4 @@ services:
       - key: DEFAULT_PHARMACY_ID
         value: PHARM_69ca9aee5b539eb0d62facd9
       - key: DEFAULT_MERCHANT_ID
-        value: PHARM_69ca9aee5b539eb0d62facd9s
+        value: PHARM_69ca9aee5b539eb0d62facd9

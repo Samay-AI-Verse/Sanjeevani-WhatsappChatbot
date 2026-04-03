@@ -178,7 +178,23 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
     if backend_command == "finalize_order":
         order_id = temp_data.get("order_id", "PENDING")
         address_str = format_address_string(temp_data.get("address_info", {}))
-        msg = f"🙌 *Order Confirmed!* \n\nThank you, *{name}*. Your order is being processed. 🚚\n\n🆔 *Order ID:* #{order_id}\n📍 *Status:* In Progress\n📍 *Delivering to:* {address_str}\n\nStay healthy! ✨"
+        pharm_id = temp_data.get("pharmacy_id") or "Unknown"
+        
+        from ..core.config import MONGODB_URL
+        # Extract DB name from env for display
+        db_name = os.getenv("MONGODB_DB_NAME", "pharmacy_management")
+
+        msg = (
+            f"🙌 *Order Confirmed!* \n\n"
+            f"Thank you, *{name}*. Your order is being processed. 🚚\n\n"
+            f"🆔 *Order ID:* #{order_id}\n"
+            f"📍 *Status:* In Progress\n"
+            f"📍 *Delivering to:* {address_str}\n\n"
+            f"⚠️ *Debug Info:* \n"
+            f"• Target Pharmacy: `{pharm_id}`\n"
+            f"• Database: `{db_name}`\n\n"
+            f"Stay healthy! ✨"
+        )
         send_text(to_number, msg)
         return
 
