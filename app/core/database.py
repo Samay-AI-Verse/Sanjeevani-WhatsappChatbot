@@ -19,7 +19,7 @@ def init_db():
     global mongo_client, db, users_collection, orders_collection, addresses_collection, conversations_collection, channel_bindings_collection
     try:
         mongo_client = AsyncIOMotorClient(MONGODB_URL)
-        db_name = os.getenv("MONGODB_DB_NAME", "sanjeevani_rx_db")
+        db_name = os.getenv("MONGODB_DB_NAME", "pharmacy_management")
         db = mongo_client[db_name]
         users_collection = db.users
         orders_collection = db.consumer_orders

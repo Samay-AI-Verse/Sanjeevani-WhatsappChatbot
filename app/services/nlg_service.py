@@ -1,3 +1,4 @@
+import os
 import json
 from typing import Dict
 from ..core.logger import logger
@@ -180,7 +181,6 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
         address_str = format_address_string(temp_data.get("address_info", {}))
         pharm_id = temp_data.get("pharmacy_id") or "Unknown"
         
-        from ..core.config import MONGODB_URL
         # Extract DB name from env for display
         db_name = os.getenv("MONGODB_DB_NAME", "pharmacy_management")
 

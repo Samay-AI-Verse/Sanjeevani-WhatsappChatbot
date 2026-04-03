@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 from typing import Optional, Dict, List
 from ..core.database import users_collection, orders_collection, addresses_collection, conversations_collection
+from ..core.config import DEFAULT_MERCHANT_ID, DEFAULT_PHARMACY_ID
 from ..core.logger import logger
 from ..models.enums import ConversationState
 
@@ -116,6 +117,7 @@ async def get_user_addresses(phone: str) -> List[Dict]:
 async def create_order(phone: str, order_info: Dict):
     """Create a new order"""
     if orders_collection is None:
+        logger.error("create_order skipped: orders_collection is not initialized")
         return
 
     # Generate order ID
@@ -126,8 +128,20 @@ async def create_order(phone: str, order_info: Dict):
     source_channel = order_info.get("source_channel", "whatsapp")
     source_provider = order_info.get("source_provider", "meta")
     source_message_id = order_info.get("source_message_id")
-    pharmacy_id = order_info.get("pharmacy_id") or order_info.get("merchant_id")
+    pharmacy_id = (
+        order_info.get("pharmacy_id")
+        or order_info.get("merchant_id")
+        or DEFAULT_PHARMACY_ID
+        or DEFAULT_MERCHANT_ID
+    )
     merchant_id = order_info.get("merchant_id") or pharmacy_id
+
+    if not merchant_id:
+        merchant_id = "default_pharmacy"
+        pharmacy_id = pharmacy_id or merchant_id
+        logger.warning(
+            "create_order: missing pharmacy/merchant id; using fallback default_pharmacy"
+        )
 
     if source_message_id:
         existing = await orders_collection.find_one(
