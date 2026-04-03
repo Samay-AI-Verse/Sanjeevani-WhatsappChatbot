@@ -15,6 +15,8 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "verify_me")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
+DEFAULT_PHARMACY_ID = os.getenv("DEFAULT_PHARMACY_ID", "")
+DEFAULT_MERCHANT_ID = os.getenv("DEFAULT_MERCHANT_ID", DEFAULT_PHARMACY_ID)
 
 # =============================
 # META CLOUD API CONFIGURATION

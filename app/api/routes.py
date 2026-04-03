@@ -8,16 +8,29 @@ from ..services.db_service import (
     update_user_profile, 
     get_recent_orders, 
     get_user_addresses, 
+    save_user_address,
     get_conversation_state,
     update_conversation_state,
-    create_order
+    create_order,
+    ensure_order_indexes,
 )
 from ..services.nlu_service import extract_nlu
 from ..services.rule_engine import RuleEngine
 from ..services.nlg_service import generate_and_send_response
 from ..services.whatsapp import send_whatsapp_text, send_whatsapp_buttons, send_whatsapp_list
+from ..services.pharmacy_routing import (
+    bind_channel_to_pharmacy,
+    ensure_channel_binding_indexes,
+    resolve_pharmacy_id,
+)
 
 router = APIRouter()
+
+
+@router.on_event("startup")
+async def startup_indexes():
+    await ensure_order_indexes()
+    await ensure_channel_binding_indexes()
 
 @router.get("/webhook")
 async def verify_webhook(request: Request):
@@ -50,6 +63,7 @@ async def handle_message(request: Request):
         return {"status": "ignored"}
 
     interactive_data = data.get("ButtonPayload")
+    source_message_id = data.get("MessageSid")
     # If there is a button payload, treat it as the primary text for NLU
     if interactive_data:
         user_text = interactive_data.replace("_", " ")
@@ -59,6 +73,13 @@ async def handle_message(request: Request):
     # 1. Fetch User Profile & State
     profile = await get_user_profile(user_number) or {"user_id": user_number}
     state_doc = await get_conversation_state(user_number)
+    resolved_pharmacy_id = await resolve_pharmacy_id(channel="whatsapp", channel_user_id=user_number)
+    if resolved_pharmacy_id:
+        await bind_channel_to_pharmacy(
+            channel="whatsapp",
+            channel_user_id=user_number,
+            pharmacy_id=resolved_pharmacy_id,
+        )
     
     # State Override: If profile is complete but state is stuck in onboarding, force to GREETING
     current_state = state_doc.get("state", ConversationState.COLLECT_LANGUAGE)
@@ -150,6 +171,12 @@ async def handle_message(request: Request):
             "quantity": new_temp.get("quantity"),
             "price": new_temp.get("price", 250),
             "delivery_address": format_address_string(address_info) if address_info else "Pending",
+            "pharmacy_id": resolved_pharmacy_id,
+            "merchant_id": resolved_pharmacy_id,
+            "source_channel": "whatsapp",
+            "source_provider": "twilio",
+            "source_message_id": source_message_id,
+            "patient_name": profile.get("name") or "Customer",
         }
         order_id = await create_order(user_number, order_data)
         new_temp["order_id"] = order_id
@@ -207,6 +234,7 @@ async def handle_meta_message(request: Request):
             
         msg = messages[0]
         user_number = f"whatsapp:+{msg['from']}" # Standardize to match DB
+        source_message_id = msg.get("id")
         
         # Determine message type and extract text
         user_text = ""
@@ -231,6 +259,13 @@ async def handle_meta_message(request: Request):
     # The rest of the pipeline is 100% identical to Twilio
     profile = await get_user_profile(user_number) or {"user_id": user_number}
     state_doc = await get_conversation_state(user_number)
+    resolved_pharmacy_id = await resolve_pharmacy_id(channel="whatsapp", channel_user_id=user_number)
+    if resolved_pharmacy_id:
+        await bind_channel_to_pharmacy(
+            channel="whatsapp",
+            channel_user_id=user_number,
+            pharmacy_id=resolved_pharmacy_id,
+        )
     
     current_state = state_doc.get("state", ConversationState.COLLECT_LANGUAGE)
     if profile.get("language") and profile.get("name") and profile.get("gender") and profile.get("age"):
@@ -308,6 +343,12 @@ async def handle_meta_message(request: Request):
             "quantity": new_temp.get("quantity"), 
             "price": 250,
             "delivery_address": format_address_string(address_info) if address_info else "Pending",
+            "pharmacy_id": resolved_pharmacy_id,
+            "merchant_id": resolved_pharmacy_id,
+            "source_channel": "whatsapp",
+            "source_provider": "meta",
+            "source_message_id": source_message_id,
+            "patient_name": profile.get("name") or "Customer",
         }
         order_id = await create_order(user_number, order_data)
         new_temp["order_id"] = order_id

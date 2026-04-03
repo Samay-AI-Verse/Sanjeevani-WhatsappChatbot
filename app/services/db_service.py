@@ -11,6 +11,22 @@ async def get_user_profile(phone: str) -> Optional[Dict]:
     return await users_collection.find_one({"user_id": phone})
 
 
+async def ensure_order_indexes() -> None:
+    if orders_collection is None:
+        return
+    try:
+        await orders_collection.create_index([("merchant_id", 1), ("Order Date", -1)], background=True, name="idx_merchant_order_date")
+        await orders_collection.create_index(
+            [("source_channel", 1), ("source_message_id", 1)],
+            unique=True,
+            sparse=True,
+            background=True,
+            name="uniq_source_message",
+        )
+    except Exception as exc:
+        logger.warning(f"Could not ensure order indexes: {exc}")
+
+
 async def update_user_profile(phone: str, user_data: Dict):
     if users_collection is None:
         return
@@ -105,17 +121,52 @@ async def create_order(phone: str, order_info: Dict):
     # Generate order ID
     order_id = f"ORD{datetime.utcnow().strftime('%Y%m%d%H%M%S')}{phone[-4:]}"
 
+    quantity = int(order_info.get("quantity", 1))
+    price = int(order_info.get("price", 0))
+    source_channel = order_info.get("source_channel", "whatsapp")
+    source_provider = order_info.get("source_provider", "meta")
+    source_message_id = order_info.get("source_message_id")
+    pharmacy_id = order_info.get("pharmacy_id") or order_info.get("merchant_id")
+    merchant_id = order_info.get("merchant_id") or pharmacy_id
+
+    if source_message_id:
+        existing = await orders_collection.find_one(
+            {"source_channel": source_channel, "source_message_id": source_message_id},
+            {"_id": 0, "order_id": 1, "Order ID": 1},
+        )
+        if existing:
+            return existing.get("order_id") or existing.get("Order ID")
+
     order_data = {
+        # Canonical identity
+        "pharmacy_id": pharmacy_id,
+        "merchant_id": merchant_id,
+        # Assistant shape
         "order_id": order_id,
         "user_id": phone,
         "medicine_name": order_info.get("medicine_name"),
-        "quantity": int(order_info.get("quantity", 1)),
-        "price": int(order_info.get("price", 0)),
-        "total_amount": int(order_info.get("quantity", 1)) * int(order_info.get("price", 0)),
+        "quantity": quantity,
+        "price": price,
+        "total_amount": quantity * price,
         "delivery_address": order_info.get("delivery_address", "Local Pickup / Pending"),
         "address_id": order_info.get("address_id"),
-        "order_status": "confirmed",
+        "order_status": "Pending",
         "payment_status": "pending",
+        # System-compatible shape for shared dashboards
+        "Order ID": order_id,
+        "Patient Name": order_info.get("patient_name") or order_info.get("name") or "Customer",
+        "Medicine Name": order_info.get("medicine_name"),
+        "Quantity": quantity,
+        "Total Amount": quantity * price,
+        "Order Status": "Pending",
+        "Order Channel": order_info.get("order_channel") or ("WhatsApp" if source_channel == "whatsapp" else "Sanjeevani App"),
+        "Order Date": datetime.utcnow(),
+        "Payment Method": order_info.get("payment_method", "Unpaid"),
+        "Contact Number": phone,
+        # Source metadata
+        "source_channel": source_channel,
+        "source_provider": source_provider,
+        "source_message_id": source_message_id,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
     }
@@ -132,11 +183,11 @@ async def get_recent_orders(phone: str) -> List[Dict]:
     orders = await cursor.to_list(length=3)
     return [
         {
-            "order_id": o.get("order_id"),
-            "medicine_name": o.get("medicine_name"),
-            "quantity": o.get("quantity"),
-            "total_amount": o.get("total_amount"),
-            "status": o.get("order_status"),
+            "order_id": o.get("order_id") or o.get("Order ID"),
+            "medicine_name": o.get("medicine_name") or o.get("Medicine Name"),
+            "quantity": o.get("quantity") or o.get("Quantity"),
+            "total_amount": o.get("total_amount") or o.get("Total Amount"),
+            "status": o.get("order_status") or o.get("Order Status"),
             "date": (
                 o.get("created_at").isoformat() if o.get("created_at") else "Unknown"
             ),
