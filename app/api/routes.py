@@ -150,7 +150,7 @@ async def handle_message(request: Request):
     logger.info(f"🚦 Rule Engine: state -> {new_state}, cmd -> {backend_command}")
 
     # 4. Handle DB side-effects based on backend_command
-    if nlu_result.intent == "PROVIDE_INFO" and any(vars(nlu_result.extracted_user_fields).values()):
+    if any(val is not None for val in nlu_result.extracted_user_fields.model_dump().values()):
         await update_user_profile(user_number, nlu_result.extracted_user_fields.model_dump(exclude_none=True))
         profile = await get_user_profile(user_number)
 
@@ -322,7 +322,7 @@ async def handle_meta_message(request: Request):
         )
 
     # 4. Handle DB side-effects based on backend_command
-    if nlu_result.intent == "PROVIDE_INFO" and any(vars(nlu_result.extracted_user_fields).values()):
+    if any(val is not None for val in nlu_result.extracted_user_fields.model_dump().values()):
         await update_user_profile(user_number, nlu_result.extracted_user_fields.model_dump(exclude_none=True))
         profile = await get_user_profile(user_number)
 

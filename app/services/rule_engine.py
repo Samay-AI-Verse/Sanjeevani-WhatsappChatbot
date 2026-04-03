@@ -59,8 +59,8 @@ class RuleEngine:
                 # If it looks like a button label, ignore it as a name
                 return ConversationState.COLLECT_NAME, temp_data, "ask_name_again"
 
-            if len(clean_text.split()) > 0 and intent != "UNKNOWN":
-                nlu_result.extracted_user_fields.name = clean_text
+            if (fields.name) or (len(clean_text.split()) > 0 and intent != "UNKNOWN"):
+                if not fields.name: nlu_result.extracted_user_fields.name = clean_text
                 return ConversationState.COLLECT_GENDER, temp_data, "ask_gender"
             return ConversationState.COLLECT_NAME, temp_data, "ask_name_again"
 
@@ -68,13 +68,13 @@ class RuleEngine:
             if fields.gender:
                 return ConversationState.COLLECT_AGE, temp_data, "ask_age"
             clean_t = user_text.lower()
-            if "female" in clean_t or "woman" in clean_t or "girl" in clean_t:
+            if "female" in clean_t or "woman" in clean_t or "girl" in clean_t or "महिला" in clean_t:
                 nlu_result.extracted_user_fields.gender = "Female"
                 return ConversationState.COLLECT_AGE, temp_data, "ask_age"
-            elif "male" in clean_t or "man" in clean_t or "boy" in clean_t:
+            elif "male" in clean_t or "man" in clean_t or "boy" in clean_t or "पुरुष" in clean_t:
                 nlu_result.extracted_user_fields.gender = "Male"
                 return ConversationState.COLLECT_AGE, temp_data, "ask_age"
-            elif "other" in clean_t or "अन्य" in clean_t:
+            elif "other" in clean_t or "any" in clean_t or "अन्य" in clean_t:
                 nlu_result.extracted_user_fields.gender = "Other"
                 return ConversationState.COLLECT_AGE, temp_data, "ask_age"
 
