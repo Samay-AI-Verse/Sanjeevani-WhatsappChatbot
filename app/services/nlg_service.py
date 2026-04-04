@@ -13,7 +13,6 @@ def format_address_string(address: Dict) -> str:
     if address.get("landmark"): parts.insert(2, f"Near {address['landmark']}")
     return ", ".join(parts)
 
-def generate_and_send_response(to_number: str, backend_command: str, user_profile: Dict, temp_data: Dict, recent_orders: list = None, provider: str = "twilio", user_text: str = ""):
 def _build_order_summary(temp_data: Dict) -> str:
     findings = temp_data.get("agent_findings", {})
     refill_nudge = findings.get("refill_nudge", "")
