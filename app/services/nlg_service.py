@@ -165,6 +165,40 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
         send_buttons(to_number, msg, buttons)
         return
 
+    if backend_command == "inventory_check_failed":
+        if language == "hindi":
+            msg = "❌ कुछ दवाइयाँ अभी स्टॉक में उपलब्ध नहीं हैं। कृपया दवा या मात्रा बदलकर फिर से प्रयास करें।"
+        else:
+            msg = "❌ Some requested medicines are currently out of stock. Please change medicine or quantity and try again."
+        send_text(to_number, msg)
+        return
+
+    if backend_command == "handoff_to_system_for_confirmation":
+        ref = temp_data.get("handoff_reference", "PENDING")
+        if language == "hindi":
+            msg = (
+                "✅ *Request Received*\n\n"
+                "Inventory और safety check पूरा हो गया है।\n"
+                "आपका अनुरोध Sanjeevani System में pharmacist confirmation के लिए भेज दिया गया है।\n\n"
+                f"🆔 Reference: {ref}"
+            )
+        elif language == "marathi":
+            msg = (
+                "✅ *Request Received*\n\n"
+                "Inventory आणि safety check पूर्ण झाले आहे.\n"
+                "तुमची विनंती Sanjeevani System मध्ये pharmacist confirmation साठी पाठवली आहे.\n\n"
+                f"🆔 Reference: {ref}"
+            )
+        else:
+            msg = (
+                "✅ *Request Received*\n\n"
+                "Inventory and safety checks are complete.\n"
+                "Your request has been sent to Sanjeevani System for pharmacist confirmation.\n\n"
+                f"🆔 Reference: {ref}"
+            )
+        send_text(to_number, msg)
+        return
+
     if backend_command == "finalize_order":
         order_id = temp_data.get("order_id", "PENDING")
         address_str = format_address_string(temp_data.get("address_info", {}))

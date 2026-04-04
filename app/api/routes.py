@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import uuid
@@ -8,31 +7,31 @@ import requests
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from pydantic import BaseModel
 
-from ..core.config import DEFAULT_PHARMACY_ID, VERIFY_TOKEN
+from ..core.config import DEFAULT_PHARMACY_ID, META_VERIFY_TOKEN, VERIFY_TOKEN
 from ..core.logger import logger
 from ..models.enums import ConversationState
 from ..services.db_service import (
-    get_user_profile, 
-    update_user_profile, 
-    get_recent_orders, 
-    get_user_addresses, 
-    save_user_address,
-    get_conversation_state,
-    update_conversation_state,
-    create_order,
     ensure_order_indexes,
+    get_conversation_state,
+    get_recent_orders,
+    get_user_addresses,
+    get_user_profile,
+    save_user_address,
+    update_conversation_state,
+    update_user_profile,
 )
-from ..services.nlu_service import extract_nlu
-from ..services.rule_engine import RuleEngine
+from ..services.medicine_matcher import MedicineMatcher
 from ..services.nlg_service import generate_and_send_response
-from ..services.whatsapp import send_whatsapp_text, send_whatsapp_buttons, send_whatsapp_list
+from ..services.nlu_service import extract_nlu
 from ..services.pharmacy_routing import (
     bind_channel_to_pharmacy,
     ensure_channel_binding_indexes,
     resolve_pharmacy_id,
 )
-from ..services.medicine_matcher import MedicineMatcher
+from ..services.rule_engine import RuleEngine
 from ..services.system_api import call_agent_process_order
+from ..services.whatsapp import send_whatsapp_text
+from ..services.whatsapp_meta import send_whatsapp_text_meta
 
 router = APIRouter()
 
@@ -45,8 +44,7 @@ class FastChatRequest(BaseModel):
     session_id: Optional[str] = None
 
 
-def _resolve_onboarding_state(profile: Dict[str, Any], current_state: str) -> str:
-    # App fast chat has language-only onboarding.
+def _resolve_language_only_state(profile: Dict[str, Any], current_state: str) -> str:
     if not profile.get("language"):
         return ConversationState.COLLECT_LANGUAGE
     if current_state in [
@@ -59,11 +57,33 @@ def _resolve_onboarding_state(profile: Dict[str, Any], current_state: str) -> st
     return current_state
 
 
+def _resolve_full_onboarding_state(profile: Dict[str, Any], current_state: str) -> str:
+    if profile.get("language") and profile.get("name") and profile.get("gender") and profile.get("age"):
+        if current_state in [
+            ConversationState.COLLECT_LANGUAGE,
+            ConversationState.COLLECT_NAME,
+            ConversationState.COLLECT_GENDER,
+            ConversationState.COLLECT_AGE,
+        ]:
+            return ConversationState.GREETING
+        return current_state
+
+    if not profile.get("language"):
+        return ConversationState.COLLECT_LANGUAGE
+    if not profile.get("name"):
+        return ConversationState.COLLECT_NAME
+    if not profile.get("gender"):
+        return ConversationState.COLLECT_GENDER
+    if not profile.get("age"):
+        return ConversationState.COLLECT_AGE
+    return current_state
+
+
 def _norm_lang(lang_value: Optional[str]) -> str:
     raw = (lang_value or "").strip().lower()
-    if "hind" in raw or "हिं" in raw:
+    if "hind" in raw or "???" in raw:
         return "hindi"
-    if "mara" in raw or "मराठ" in raw:
+    if "mara" in raw or "????" in raw:
         return "marathi"
     return "english"
 
@@ -81,51 +101,37 @@ def _build_fast_reply(
 
     if backend_command in ["ask_language", "ask_language_again"]:
         if lang == "hindi":
-            return "संजीवनी में आपका स्वागत है। कृपया भाषा चुनें: English / Hindi / Marathi."
+            return "??????? ??? ???? ?????? ??? ????? ???? ?????: English / Hindi / Marathi."
         if lang == "marathi":
-            return "संजीवनीमध्ये स्वागत आहे. कृपया भाषा निवडा: English / Hindi / Marathi."
+            return "???????????? ?????? ???. ????? ???? ?????: English / Hindi / Marathi."
         return "Welcome to Sanjeevani. Please choose language: English / Hindi / Marathi."
-    if backend_command in ["ask_name", "ask_name_again"]:
+    if backend_command in ["registration_complete", "welcome_user"]:
         if lang == "hindi":
-            return "ठीक है। अब दवाइयों का नाम और मात्रा बताइए।"
+            return f"???? ??? ?? ??, {name}. ?? ??? ?? ??? ?? ?????? ??????"
         if lang == "marathi":
-            return "ठीक आहे. आता औषधाचे नाव आणि प्रमाण सांगा."
-        return "Great. Now tell me medicine name and quantity."
-    if backend_command in ["ask_gender", "ask_gender_again"]:
-        if lang == "hindi":
-            return "दवाइयों का नाम और मात्रा बताइए।"
-        if lang == "marathi":
-            return "औषधाचे नाव आणि प्रमाण सांगा."
-        return "Please tell me medicine name and quantity."
-    if backend_command in ["ask_age", "ask_age_again"]:
-        if lang == "hindi":
-            return "दवाइयों का नाम और मात्रा बताइए।"
-        if lang == "marathi":
-            return "औषधाचे नाव आणि प्रमाण सांगा."
-        return "Please tell me medicine name and quantity."
-    if backend_command == "registration_complete":
-        if lang == "hindi":
-            return f"भाषा सेट हो गई, {name}. अब बताइए कौन सी दवा चाहिए।"
-        if lang == "marathi":
-            return f"भाषा सेट झाली, {name}. आता कोणते औषध हवे ते सांगा."
-        return f"Language set, {name}. Tell me which medicine you want to order."
+            return f"???? ??? ????, {name}. ??? ?????? ??? ??? ?????? ?????."
+        return f"Language set, {name}. Tell me medicine name and quantity."
     if backend_command in ["ask_quantity", "ask_quantity_again"]:
         return f"How many units of {med} do you need?"
     if backend_command in ["ask_order_confirmation", "ask_order_confirmation_again"]:
-        return f"Please confirm order: {med} x {qty}. Reply YES to confirm or NO to cancel."
+        findings = temp_data.get("agent_findings") or {}
+        stock_rows = findings.get("items") or []
+        out_items = [i.get("medicine_name") for i in stock_rows if not i.get("in_stock")]
+        if out_items:
+            return f"Some items are out of stock ({', '.join(out_items)}). Please change item/quantity."
+        return f"Inventory checked for {med} x {qty}. Share delivery address to send for pharmacist confirmation."
     if backend_command in ["ask_address_selection", "ask_full_address"]:
         return "Please share your full delivery address."
     if backend_command in ["ask_prescription_strict", "ask_prescription_strict_again"]:
+        return "Prescription is required. Please upload a clear prescription image."
+    if backend_command == "inventory_check_failed":
+        return "Some requested items are out of stock right now. Please change medicine or quantity and try again."
+    if backend_command == "handoff_to_system_for_confirmation":
+        ref = temp_data.get("handoff_reference", "PENDING")
         return (
-            "Your order contains medicines that require prescription. "
-            "Please upload a clear prescription image so I can extract all medicines."
+            f"Request captured. Inventory check complete. Sent to Sanjeevani System for pharmacist confirmation. "
+            f"Reference: {ref}."
         )
-    if backend_command == "prescription_uploaded_success":
-        return "Prescription received. Please confirm your order details."
-    if backend_command == "finalize_order":
-        return f"Order confirmed. Order ID: {temp_data.get('order_id', 'PENDING')}."
-    if backend_command == "order_cancelled":
-        return "Order cancelled."
     if backend_command == "show_tracking":
         if not recent_orders:
             return "No recent orders found."
@@ -212,32 +218,69 @@ def _extract_medicine_candidates_from_text(ocr_text: str) -> List[str]:
     return unique[:15]
 
 
-@router.post("/chat/fast")
-async def chat_fast(body: FastChatRequest):
-    user_number = body.user_id.strip()
-    user_text = (body.message or "").strip()
-    interactive_data = (body.interactive_data or "").strip() or None
+def _extract_items_for_agent(nlu_result, temp_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
 
-    if not user_number or not user_text:
-        return {"status": "error", "message": "user_id and message are required"}
+    if nlu_result and getattr(nlu_result, "items", None):
+        for item in nlu_result.items:
+            if item.name:
+                items.append({"name": item.name, "quantity": item.quantity or 1})
 
-    profile = await get_user_profile(user_number) or {"user_id": user_number}
-    state_doc = await get_conversation_state(user_number)
-    resolved_pharmacy_id = (
-        (body.pharmacy_id or "").strip()
-        or await resolve_pharmacy_id(channel="app", channel_user_id=user_number)
-        or DEFAULT_PHARMACY_ID
-    )
-    if resolved_pharmacy_id:
-        await bind_channel_to_pharmacy(channel="app", channel_user_id=user_number, pharmacy_id=resolved_pharmacy_id)
+    if items:
+        return items
 
-    current_state = _resolve_onboarding_state(
-        profile=profile,
-        current_state=state_doc.get("state", ConversationState.COLLECT_LANGUAGE),
-    )
-    temp_data = state_doc.get("temp_data", {})
+    med_text = str(temp_data.get("medicine_name") or "").strip()
+    qty = int(temp_data.get("quantity") or 1)
+    if not med_text:
+        return []
+
+    for part in [p.strip() for p in med_text.split(",") if p.strip()]:
+        items.append({"name": part, "quantity": qty})
+    return items
+
+
+async def _ensure_agent_findings(
+    user_number: str,
+    merchant_id: str,
+    temp_data: Dict[str, Any],
+    nlu_result=None,
+) -> bool:
+    if temp_data.get("agent_findings"):
+        return True
+
+    raw_items = _extract_items_for_agent(nlu_result, temp_data)
+    if not raw_items:
+        return False
+
+    matcher = MedicineMatcher()
+    matched_items: List[Dict[str, Any]] = []
+    for item in raw_items:
+        match = await matcher.find_match(item["name"])
+        matched_items.append({"name": match["name"] if match else item["name"], "quantity": int(item.get("quantity") or 1)})
+
+    agent_resp = await call_agent_process_order(user_number, merchant_id or "GENERAL", matched_items)
+    if not (agent_resp and agent_resp.get("status") == "SUCCESS"):
+        return False
+
+    temp_data["agent_findings"] = agent_resp
+    temp_data["medicine_name"] = ", ".join([i["medicine_name"] for i in agent_resp.get("items", [])]) or temp_data.get("medicine_name")
+    temp_data["quantity"] = sum([int(i.get("requested_qty", 1)) for i in agent_resp.get("items", [])]) or temp_data.get("quantity") or 1
+    return True
+
+
+async def _run_conversation_turn(
+    *,
+    user_number: str,
+    user_text: str,
+    interactive_data: Optional[str],
+    current_state: str,
+    temp_data: Dict[str, Any],
+    profile: Dict[str, Any],
+    resolved_pharmacy_id: str,
+    app_mode: bool,
+    provider: str,
+) -> tuple[str, str, Dict[str, Any], Dict[str, Any], list]:
     nlu_result = extract_nlu(user_text, current_state)
-
     backend_command = None
     new_state = None
     new_temp = temp_data.copy()
@@ -257,26 +300,34 @@ async def chat_fast(body: FastChatRequest):
                 new_temp["address_info"] = selected
                 new_state = ConversationState.FINALIZE_ORDER
                 backend_command = "finalize_order"
+        elif interactive_data == "save_addr_yes":
+            await save_user_address(user_number, temp_data.get("address_info", {}))
+            new_state = ConversationState.FINALIZE_ORDER
+            backend_command = "finalize_order"
+        elif interactive_data == "save_addr_no":
+            new_state = ConversationState.FINALIZE_ORDER
+            backend_command = "finalize_order"
 
     if not backend_command and nlu_result.intent in ["ORDER_MEDICINE", "PROVIDE_INFO"] and nlu_result.items:
-        if any(i.name for i in nlu_result.items):
-            matcher = MedicineMatcher()
-            matched_items = []
-            for item in nlu_result.items:
-                match = await matcher.find_match(item.name)
-                matched_items.append({"name": match["name"] if match else item.name, "quantity": item.quantity or 1})
+        if provider == "twilio":
+            send_whatsapp_text(user_number, "Checking inventory and pharmacy safety... Please wait a moment.", provider="twilio")
+        elif provider == "meta":
+            send_whatsapp_text_meta(user_number, "Checking inventory and pharmacy safety... Please wait a moment.")
 
-            agent_resp = await call_agent_process_order(user_number, resolved_pharmacy_id or "GENERAL", matched_items)
-            if agent_resp and agent_resp.get("status") == "SUCCESS":
-                new_temp["agent_findings"] = agent_resp
-                new_temp["medicine_name"] = ", ".join([i["medicine_name"] for i in agent_resp["items"]])
-                new_temp["quantity"] = sum([i["requested_qty"] for i in agent_resp["items"]])
-                if agent_resp.get("requires_prescription"):
-                    new_state = ConversationState.AWAITING_PRESCRIPTION
-                    backend_command = "ask_prescription_strict"
-                else:
-                    new_state = ConversationState.CONFIRM_ORDER
-                    backend_command = "ask_order_confirmation"
+        await _ensure_agent_findings(
+            user_number=user_number,
+            merchant_id=resolved_pharmacy_id or "GENERAL",
+            temp_data=new_temp,
+            nlu_result=nlu_result,
+        )
+        findings = new_temp.get("agent_findings") or {}
+        if findings.get("status") == "SUCCESS":
+            if findings.get("requires_prescription"):
+                new_state = ConversationState.AWAITING_PRESCRIPTION
+                backend_command = "ask_prescription_strict"
+            else:
+                new_state = ConversationState.CONFIRM_ORDER
+                backend_command = "ask_order_confirmation"
 
     if not backend_command:
         new_state, new_temp, backend_command = RuleEngine.process(
@@ -287,59 +338,93 @@ async def chat_fast(body: FastChatRequest):
             user_text=user_text,
         )
 
-    # Fast app onboarding policy:
-    # language only -> skip name/gender/age collection entirely.
-    if backend_command in [
-        "ask_name",
-        "ask_name_again",
-        "ask_gender",
-        "ask_gender_again",
-        "ask_age",
-        "ask_age_again",
+    if app_mode and backend_command in [
+        "ask_name", "ask_name_again", "ask_gender", "ask_gender_again", "ask_age", "ask_age_again"
     ]:
         backend_command = "registration_complete"
         new_state = ConversationState.GREETING
 
-    # Normalize quick language choices even if NLU misses them.
     if current_state == ConversationState.COLLECT_LANGUAGE and not nlu_result.extracted_user_fields.language:
         lowered = user_text.lower()
         if "eng" in lowered:
             nlu_result.extracted_user_fields.language = "English"
-        elif "hind" in lowered or "हिं" in user_text:
+        elif "hind" in lowered or "???" in user_text:
             nlu_result.extracted_user_fields.language = "Hindi"
-        elif "mara" in lowered or "मराठ" in user_text:
+        elif "mara" in lowered or "????" in user_text:
             nlu_result.extracted_user_fields.language = "Marathi"
 
     if any(val is not None for val in nlu_result.extracted_user_fields.model_dump().values()):
         await update_user_profile(user_number, nlu_result.extracted_user_fields.model_dump(exclude_none=True))
         profile = await get_user_profile(user_number) or profile
 
+    if backend_command in ["ask_order_confirmation", "ask_order_confirmation_again", "finalize_order"]:
+        await _ensure_agent_findings(
+            user_number=user_number,
+            merchant_id=resolved_pharmacy_id or "GENERAL",
+            temp_data=new_temp,
+            nlu_result=nlu_result,
+        )
+        findings = new_temp.get("agent_findings") or {}
+        rows = findings.get("items") or []
+        if rows and any(not bool(i.get("in_stock", False)) for i in rows):
+            backend_command = "inventory_check_failed"
+            new_state = ConversationState.GREETING
+
     recent_orders = await get_recent_orders(user_number) if backend_command == "show_tracking" else []
+
     if backend_command == "ask_address_selection" and new_state == ConversationState.COLLECT_ADDRESS_SELECTION:
         addresses = await get_user_addresses(user_number)
         new_temp["available_addresses"] = [{k: v for k, v in a.items() if k != "_id"} for a in addresses]
 
-    order_id = None
     if backend_command == "finalize_order":
-        from ..services.nlg_service import format_address_string
-        address_info = new_temp.get("address_info", {})
-        order_data = {
-            "medicine_name": new_temp.get("medicine_name"),
-            "quantity": new_temp.get("quantity"),
-            "price": new_temp.get("price", 250),
-            "delivery_address": format_address_string(address_info) if address_info else "Pending",
-            "pharmacy_id": resolved_pharmacy_id,
-            "merchant_id": resolved_pharmacy_id,
-            "source_channel": "app",
-            "source_provider": "sanjeevani_hub",
-            "source_message_id": f"app:{user_number}:{uuid.uuid4().hex[:10]}",
-            "patient_name": profile.get("name") or "Customer",
-        }
-        order_id = await create_order(user_number, order_data)
-        new_temp["order_id"] = order_id
+        backend_command = "handoff_to_system_for_confirmation"
+        new_temp["handoff_reference"] = f"REQ-{uuid.uuid4().hex[:8].upper()}"
         await update_conversation_state(user_number, ConversationState.GREETING, {})
     else:
         await update_conversation_state(user_number, new_state, new_temp)
+
+    return backend_command, new_state, new_temp, profile, recent_orders
+
+
+@router.on_event("startup")
+async def startup_indexes():
+    await ensure_order_indexes()
+    await ensure_channel_binding_indexes()
+
+
+@router.post("/chat/fast")
+async def chat_fast(body: FastChatRequest):
+    user_number = body.user_id.strip()
+    user_text = (body.message or "").strip()
+    interactive_data = (body.interactive_data or "").strip() or None
+
+    if not user_number or not user_text:
+        return {"status": "error", "message": "user_id and message are required"}
+
+    profile = await get_user_profile(user_number) or {"user_id": user_number}
+    state_doc = await get_conversation_state(user_number)
+    resolved_pharmacy_id = (
+        (body.pharmacy_id or "").strip()
+        or await resolve_pharmacy_id(channel="app", channel_user_id=user_number)
+        or DEFAULT_PHARMACY_ID
+    )
+    if resolved_pharmacy_id:
+        await bind_channel_to_pharmacy(channel="app", channel_user_id=user_number, pharmacy_id=resolved_pharmacy_id)
+
+    current_state = _resolve_language_only_state(profile, state_doc.get("state", ConversationState.COLLECT_LANGUAGE))
+    temp_data = state_doc.get("temp_data", {})
+
+    backend_command, new_state, new_temp, profile, recent_orders = await _run_conversation_turn(
+        user_number=user_number,
+        user_text=user_text,
+        interactive_data=interactive_data,
+        current_state=current_state,
+        temp_data=temp_data,
+        profile=profile,
+        resolved_pharmacy_id=resolved_pharmacy_id,
+        app_mode=True,
+        provider="app",
+    )
 
     reply = _build_fast_reply(backend_command, profile, new_temp, recent_orders)
     return {
@@ -349,11 +434,11 @@ async def chat_fast(body: FastChatRequest):
         "state": str(new_state),
         "session_id": body.session_id or user_number,
         "backend_command": backend_command,
-        "order_id": order_id,
         "pharmacy_id": resolved_pharmacy_id,
         "extracted_data": {
             "medicine_name": new_temp.get("medicine_name"),
             "quantity": new_temp.get("quantity"),
+            "handoff_reference": new_temp.get("handoff_reference"),
         },
     }
 
@@ -417,7 +502,6 @@ async def upload_prescription_fast(
         else:
             unmatched_names.append(candidate)
 
-    profile = await get_user_profile(user_number) or {"user_id": user_number}
     state_doc = await get_conversation_state(user_number)
     temp_data = state_doc.get("temp_data", {}).copy()
 
@@ -443,7 +527,7 @@ async def upload_prescription_fast(
             "Prescription uploaded successfully.\n\n"
             "I extracted these medicines:\n"
             f"{medicine_lines}\n\n"
-            "Please confirm quantity for each medicine and share delivery address to place order."
+            "Please confirm quantity and delivery address."
         )
     else:
         message = (
@@ -464,15 +548,9 @@ async def upload_prescription_fast(
             "unmatched_candidates": unmatched_names,
             "required_next_fields": ["quantity_confirmation", "delivery_address"] if extracted_names else ["medicine_confirmation"],
             "pharmacy_id": resolved_pharmacy_id,
-            "patient_name": profile.get("name"),
         },
     }
 
-
-@router.on_event("startup")
-async def startup_indexes():
-    await ensure_order_indexes()
-    await ensure_channel_binding_indexes()
 
 @router.get("/webhook")
 async def verify_webhook(request: Request):
@@ -481,168 +559,58 @@ async def verify_webhook(request: Request):
         return int(p.get("hub.challenge", 0))
     return "Verification failed"
 
+
 @router.post("/webhook")
 async def handle_message(request: Request):
     try:
         data = await request.form()
-    except:
+    except Exception:
         return {"status": "no_form_data"}
 
     user_number = data.get("From", "")
     user_text = data.get("Body", "")
+    source_message_id = data.get("MessageSid")
 
     if not user_number or not user_text:
         try:
             json_data = await request.json()
             user_number = json_data.get("From")
             user_text = json_data.get("Body")
-        except: pass
+            source_message_id = source_message_id or json_data.get("MessageSid")
+        except Exception:
+            pass
 
     if not user_number or not user_text:
         return {"status": "ignored"}
 
     interactive_data = data.get("ButtonPayload")
-    source_message_id = data.get("MessageSid")
     if interactive_data:
         user_text = interactive_data.replace("_", " ")
 
-    logger.info(f"📩 Message from {user_number}: {user_text}")
-
-    # 1. Fetch User Profile & State
     profile = await get_user_profile(user_number) or {"user_id": user_number}
     state_doc = await get_conversation_state(user_number)
     resolved_pharmacy_id = await resolve_pharmacy_id(channel="whatsapp", channel_user_id=user_number)
     if resolved_pharmacy_id:
         await bind_channel_to_pharmacy(channel="whatsapp", channel_user_id=user_number, pharmacy_id=resolved_pharmacy_id)
-    
-    current_state = state_doc.get("state", ConversationState.COLLECT_LANGUAGE)
-    if profile.get("language") and profile.get("name") and profile.get("gender") and profile.get("age"):
-        if current_state in [ConversationState.COLLECT_LANGUAGE, ConversationState.COLLECT_NAME, ConversationState.COLLECT_GENDER, ConversationState.COLLECT_AGE]:
-            current_state = ConversationState.GREETING
-    else:
-        if not profile.get("language"): current_state = ConversationState.COLLECT_LANGUAGE
-        elif not profile.get("name"): current_state = ConversationState.COLLECT_NAME
-        elif not profile.get("gender"): current_state = ConversationState.COLLECT_GENDER
-        elif not profile.get("age"): current_state = ConversationState.COLLECT_AGE
-    
+
+    current_state = _resolve_full_onboarding_state(profile, state_doc.get("state", ConversationState.COLLECT_LANGUAGE))
     temp_data = state_doc.get("temp_data", {})
-    nlu_result = extract_nlu(user_text, current_state)
-    logger.info(f"🧠 NLU Result: {nlu_result.model_dump_json()}")
 
-    # --- INTERACTIVE BUTTON INTERCEPTS ---
-    backend_command = None
-    new_state = None
-    new_temp = temp_data.copy()
+    backend_command, _, new_temp, profile, recent_orders = await _run_conversation_turn(
+        user_number=user_number,
+        user_text=user_text,
+        interactive_data=interactive_data,
+        current_state=current_state,
+        temp_data=temp_data,
+        profile=profile,
+        resolved_pharmacy_id=resolved_pharmacy_id or DEFAULT_PHARMACY_ID,
+        app_mode=False,
+        provider="twilio",
+    )
 
-    if interactive_data:
-        if interactive_data == "confirm_order":
-            new_state = ConversationState.COLLECT_ADDRESS_SELECTION
-            backend_command = "ask_address_selection"
-        elif interactive_data == "addr_new":
-            new_state = ConversationState.COLLECT_FULL_ADDRESS
-            backend_command = "ask_full_address"
-        elif interactive_data.startswith("addr_select_"):
-            idx = int(interactive_data.split("_")[-1])
-            addresses = await get_user_addresses(user_number)
-            if idx < len(addresses):
-                selected = {k: v for k, v in addresses[idx].items() if k != '_id'}
-                new_temp["address_info"] = selected
-                new_state = ConversationState.FINALIZE_ORDER
-                backend_command = "finalize_order"
-        elif interactive_data == "save_addr_yes":
-            await save_user_address(user_number, temp_data.get("address_info", {}))
-            new_state = ConversationState.FINALIZE_ORDER
-            backend_command = "finalize_order"
-        elif interactive_data == "save_addr_no":
-            new_state = ConversationState.FINALIZE_ORDER
-            backend_command = "finalize_order"
-
-    # --- AGENT PIPELINE INTERCEPT (Twilio) ---
-    if not backend_command and nlu_result.intent in ["ORDER_MEDICINE", "PROVIDE_INFO"] and nlu_result.items:
-        # Check if we have medicine names
-        if any(i.name for i in nlu_result.items):
-            # 1. Send immediate feedback
-            send_whatsapp_text(user_number, "Checking inventory and pharmacy safety... Please wait a moment. ⏳", provider="twilio")
-            
-            # 2. Match medicines against Master Database
-            matcher = MedicineMatcher()
-            matched_items = []
-            for item in nlu_result.items:
-                match = await matcher.find_match(item.name)
-                matched_items.append({"name": match["name"] if match else item.name, "quantity": item.quantity or 1})
-            
-            # 3. Call System Agent API
-            agent_resp = await call_agent_process_order(user_number, resolved_pharmacy_id or "GENERAL", matched_items)
-            
-            if agent_resp and agent_resp.get("status") == "SUCCESS":
-                new_temp["agent_findings"] = agent_resp
-                new_temp["medicine_name"] = ", ".join([i["medicine_name"] for i in agent_resp["items"]])
-                new_temp["quantity"] = sum([i["requested_qty"] for i in agent_resp["items"]])
-                
-                if agent_resp.get("requires_prescription"):
-                    new_state = ConversationState.AWAITING_PRESCRIPTION
-                    backend_command = "ask_prescription_strict"
-                else:
-                    new_state = ConversationState.CONFIRM_ORDER
-                    backend_command = "ask_order_confirmation"
-
-    # 3. Rule Engine Decision
-    if not backend_command:
-        new_state, new_temp, backend_command = RuleEngine.process(
-            nlu_result=nlu_result, current_state=current_state, user_profile=profile, temp_data=temp_data, user_text=user_text
-        )
-
-    # 4. Handle DB side-effects
-    if any(val is not None for val in nlu_result.extracted_user_fields.model_dump().values()):
-        await update_user_profile(user_number, nlu_result.extracted_user_fields.model_dump(exclude_none=True))
-        profile = await get_user_profile(user_number)
-
-    if backend_command == "show_tracking":
-        recent_orders = await get_recent_orders(user_number)
-    else: recent_orders = []
-
-    if backend_command == "ask_address_selection" and new_state == ConversationState.COLLECT_ADDRESS_SELECTION:
-        addresses = await get_user_addresses(user_number)
-        new_temp["available_addresses"] = [{k: v for k, v in a.items() if k != '_id'} for a in addresses]
-
-    if backend_command == "finalize_order":
-        from ..services.nlg_service import format_address_string
-        address_info = new_temp.get("address_info", {})
-        order_data = {
-            "medicine_name": new_temp.get("medicine_name"),
-            "quantity": new_temp.get("quantity"),
-            "price": new_temp.get("price", 250),
-            "delivery_address": format_address_string(address_info) if address_info else "Pending",
-            "pharmacy_id": resolved_pharmacy_id,
-            "merchant_id": resolved_pharmacy_id,
-            "source_channel": "whatsapp",
-            "source_provider": "twilio",
-            "source_message_id": source_message_id,
-            "patient_name": profile.get("name") or "Customer",
-        }
-        
-        logger.info(f"💾 Finalizing order for {user_number}. Data: {json.dumps(order_data, default=str)}")
-        try:
-            order_id = await create_order(user_number, order_data)
-            logger.info(f"✅ Order created successfully: {order_id}")
-            new_temp["order_id"] = order_id
-        except Exception as e:
-            logger.error(f"❌ Failed to create order: {e}")
-            
-        await update_conversation_state(user_number, ConversationState.GREETING, {})
-    else:
-        await update_conversation_state(user_number, new_state, new_temp)
-
-    logger.info(f"📤 Sending response to {user_number} (Command: {backend_command})")
     generate_and_send_response(user_number, backend_command, profile, new_temp, recent_orders, provider="twilio", user_text=user_text)
+    return {"status": "success", "source_message_id": source_message_id}
 
-    return {"status": "success"}
-
-# ==========================================
-# META CLOUD API ROUTES
-# ==========================================
-from ..core.config import META_VERIFY_TOKEN
-from ..services.whatsapp_meta import send_whatsapp_text_meta
 
 @router.get("/webhook/meta")
 async def verify_meta_webhook(request: Request):
@@ -651,24 +619,31 @@ async def verify_meta_webhook(request: Request):
         return int(p.get("hub.challenge", 0))
     return "Verification failed"
 
+
 @router.post("/webhook/meta")
 async def handle_meta_message(request: Request):
-    try: data = await request.json()
-    except: return {"status": "success"}
+    try:
+        data = await request.json()
+    except Exception:
+        return {"status": "success"}
 
     try:
         entry = data["entry"][0]
         changes = entry["changes"][0]
         value = changes["value"]
-        if "statuses" in value: return {"status": "success"}
+        if "statuses" in value:
+            return {"status": "success"}
         messages = value.get("messages", [])
-        if not messages: return {"status": "success"}
+        if not messages:
+            return {"status": "success"}
+
         msg = messages[0]
         user_number = f"whatsapp:+{msg['from']}"
-        source_message_id = msg.get("id")
         user_text = ""
         interactive_data = None
-        if msg["type"] == "text": user_text = msg["text"]["body"]
+
+        if msg["type"] == "text":
+            user_text = msg["text"]["body"]
         elif msg["type"] == "interactive":
             interactive = msg["interactive"]
             if interactive["type"] == "button_reply":
@@ -677,72 +652,27 @@ async def handle_meta_message(request: Request):
             elif interactive["type"] == "list_reply":
                 interactive_data = interactive["list_reply"]["id"]
                 user_text = interactive["list_reply"]["title"]
-    except: return {"status": "success"}
+    except Exception:
+        return {"status": "success"}
 
     profile = await get_user_profile(user_number) or {"user_id": user_number}
     state_doc = await get_conversation_state(user_number)
     resolved_pharmacy_id = await resolve_pharmacy_id(channel="whatsapp", channel_user_id=user_number)
-    
-    current_state = state_doc.get("state", ConversationState.COLLECT_LANGUAGE)
+
+    current_state = _resolve_full_onboarding_state(profile, state_doc.get("state", ConversationState.COLLECT_LANGUAGE))
     temp_data = state_doc.get("temp_data", {})
-    nlu_result = extract_nlu(user_text, current_state)
 
-    backend_command = None
-    new_state = None
-    new_temp = temp_data.copy()
+    backend_command, _, new_temp, profile, recent_orders = await _run_conversation_turn(
+        user_number=user_number,
+        user_text=user_text,
+        interactive_data=interactive_data,
+        current_state=current_state,
+        temp_data=temp_data,
+        profile=profile,
+        resolved_pharmacy_id=resolved_pharmacy_id or DEFAULT_PHARMACY_ID,
+        app_mode=False,
+        provider="meta",
+    )
 
-    if interactive_data:
-        if interactive_data == "confirm_order":
-            new_state = ConversationState.COLLECT_ADDRESS_SELECTION
-            backend_command = "ask_address_selection"
-        # ... logic inherited from handle_message ...
-        elif interactive_data == "addr_new": new_state = ConversationState.COLLECT_FULL_ADDRESS; backend_command = "ask_full_address"
-        elif interactive_data.startswith("addr_select_"):
-            idx = int(interactive_data.split("_")[-1])
-            addresses = await get_user_addresses(user_number)
-            if idx < len(addresses):
-                new_temp["address_info"] = {k: v for k, v in addresses[idx].items() if k != '_id'}
-                new_state = ConversationState.FINALIZE_ORDER; backend_command = "finalize_order"
-
-    # --- AGENT PIPELINE INTERCEPT (Meta) ---
-    if not backend_command and nlu_result.intent in ["ORDER_MEDICINE", "PROVIDE_INFO"] and nlu_result.items:
-        if any(i.name for i in nlu_result.items):
-            send_whatsapp_text_meta(user_number, "Checking inventory and pharmacy safety... Please wait a moment. ⏳")
-            matcher = MedicineMatcher()
-            matched_items = []
-            for item in nlu_result.items:
-                match = await matcher.find_match(item.name)
-                matched_items.append({"name": match["name"] if match else item.name, "quantity": item.quantity or 1})
-            
-            agent_resp = await call_agent_process_order(user_number, resolved_pharmacy_id or "GENERAL", matched_items)
-            if agent_resp and agent_resp.get("status") == "SUCCESS":
-                new_temp["agent_findings"] = agent_resp
-                new_temp["medicine_name"] = ", ".join([i["medicine_name"] for i in agent_resp["items"]])
-                new_temp["quantity"] = sum([i["requested_qty"] for i in agent_resp["items"]])
-                if agent_resp.get("requires_prescription"):
-                    new_state = ConversationState.AWAITING_PRESCRIPTION; backend_command = "ask_prescription_strict"
-                else:
-                    new_state = ConversationState.CONFIRM_ORDER; backend_command = "ask_order_confirmation"
-
-    if not backend_command:
-        new_state, new_temp, backend_command = RuleEngine.process(
-            nlu_result=nlu_result, current_state=current_state, user_profile=profile, temp_data=temp_data, user_text=user_text
-        )
-
-    if backend_command == "finalize_order":
-        from ..services.nlg_service import format_address_string
-        address_info = new_temp.get("address_info", {})
-        order_data = {
-            "medicine_name": new_temp.get("medicine_name"), "quantity": new_temp.get("quantity"), "price": 250,
-            "delivery_address": format_address_string(address_info) if address_info else "Pending",
-            "pharmacy_id": resolved_pharmacy_id, "merchant_id": resolved_pharmacy_id,
-            "source_channel": "whatsapp", "source_provider": "meta", "source_message_id": source_message_id,
-            "patient_name": profile.get("name") or "Customer",
-        }
-        await create_order(user_number, order_data)
-        await update_conversation_state(user_number, ConversationState.GREETING, {})
-    else:
-        await update_conversation_state(user_number, new_state, new_temp)
-
-    generate_and_send_response(user_number, backend_command, profile, new_temp, [], provider="meta", user_text=user_text)
+    generate_and_send_response(user_number, backend_command, profile, new_temp, recent_orders, provider="meta", user_text=user_text)
     return {"status": "success"}
