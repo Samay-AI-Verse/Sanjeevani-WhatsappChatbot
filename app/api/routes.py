@@ -86,6 +86,55 @@ def _is_project_related_message(user_text: str) -> bool:
     # Relaxed gatekeeper: let the LLM (nlg_service) handle out-of-scope intelligently
     return True
 
+def _infer_prescription_required(temp_data: Dict[str, Any]) -> bool:
+    rx_keywords = [
+        "amoxicillin",
+        "azithromycin",
+        "cefixime",
+        "ciprofloxacin",
+        "levofloxacin",
+        "tramadol",
+        "codeine",
+        "alprazolam",
+        "clonazepam",
+        "diazepam",
+        "zolpidem",
+        "pregabalin",
+    ]
+    otc_keywords = [
+        "paracetamol",
+        "dolo",
+        "crocin",
+        "ors",
+        "cetirizine",
+        "vitamin c",
+        "vitamin d",
+    ]
+
+    names: List[str] = []
+    findings = temp_data.get("agent_findings") or {}
+    for row in findings.get("items") or []:
+        nm = str(row.get("medicine_name") or "").strip()
+        if nm:
+            names.append(nm.lower())
+
+    med_text = str(temp_data.get("medicine_name") or "").strip().lower()
+    if med_text:
+        names.extend([part.strip() for part in med_text.split(",") if part.strip()])
+
+    if not names:
+        return False
+
+    # Any strong Rx keyword means prescription required.
+    if any(any(rx in n for rx in rx_keywords) for n in names):
+        return True
+
+    # Pure OTC requests should not require prescription.
+    if all(any(otc in n for otc in otc_keywords) for n in names):
+        return False
+
+    return False
+
 def _build_fast_reply(
     backend_command: str,
     profile: Dict[str, Any],
@@ -290,7 +339,10 @@ async def _run_conversation_turn(
         )
         findings = new_temp.get("agent_findings") or {}
         if findings.get("status") == "SUCCESS":
-            if findings.get("requires_prescription"):
+            needs_rx = bool(findings.get("requires_prescription")) or _infer_prescription_required(new_temp)
+            findings["requires_prescription"] = needs_rx
+            new_temp["agent_findings"] = findings
+            if needs_rx:
                 new_state = ConversationState.AWAITING_PRESCRIPTION
                 backend_command = "ask_prescription_strict"
             else:
@@ -333,6 +385,11 @@ async def _run_conversation_turn(
             nlu_result=nlu_result,
         )
         findings = new_temp.get("agent_findings") or {}
+        if bool(findings.get("requires_prescription")) or _infer_prescription_required(new_temp):
+            findings["requires_prescription"] = True
+            new_temp["agent_findings"] = findings
+            backend_command = "ask_prescription_strict"
+            new_state = ConversationState.AWAITING_PRESCRIPTION
         rows = findings.get("items") or []
         if rows and any(not bool(i.get("in_stock", False)) for i in rows):
             backend_command = "inventory_check_failed"

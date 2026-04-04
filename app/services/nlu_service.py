@@ -17,14 +17,15 @@ Your ONLY job is to extract facts, intents, and medicine requests from the user'
 Instruction:
 1. Extract all medicines mentioned (e.g., "Augmentin", "Dolo 650", "Metformin").
 2. For each medicine, extract the Quantity (default to 1 if not mentioned) and strip unit words like "strips", "tablets", "packs".
-3. Identify the user's intent: GREETING, ORDER_MEDICINE, TRACK_ORDER, PROVIDE_INFO, or COMPLAINT.
-4. DO NOT generate conversational replies.
+3. Identify the user's intent: GREETING, ORDER_MEDICINE, TRACK_ORDER, PROVIDE_INFO, COMPLAINT, or PRICE_ISSUE.
+4. PRICE_ISSUE should be used if the user complains that prices are high or asks for a discount/low rate.
+5. DO NOT generate conversational replies.
 
 Current State Context: {current_state}
 
 Outputs MUST strictly match this JSON schema:
 {
-  "intent": "ORDER_MEDICINE | CONFIRM | CANCEL | PROVIDE_INFO | TRACK_ORDER | GREETING | COMPLAINT | UNKNOWN",
+  "intent": "ORDER_MEDICINE | CONFIRM | CANCEL | PROVIDE_INFO | TRACK_ORDER | GREETING | COMPLAINT | PRICE_ISSUE | UNKNOWN",
   "items": [{"name": "Dolo 650", "quantity": 10, "dosage": null}],
   "extracted_user_fields": {"name": null, "age": null, "gender": null, "language": null},
   "prescription_check_needed": false,
