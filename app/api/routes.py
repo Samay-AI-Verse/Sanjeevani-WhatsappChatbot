@@ -47,6 +47,41 @@ class FastChatRequest(BaseModel):
 
 from ..services.nlg_service import generate_and_send_response, generate_response_text
 
+def _resolve_language_only_state(profile: Dict[str, Any], current_state: str) -> str:
+    if not profile.get("language"):
+        return ConversationState.COLLECT_LANGUAGE
+    if current_state in [
+        ConversationState.COLLECT_LANGUAGE,
+        ConversationState.COLLECT_NAME,
+        ConversationState.COLLECT_GENDER,
+        ConversationState.COLLECT_AGE,
+    ]:
+        return ConversationState.GREETING
+    return current_state
+
+
+def _resolve_full_onboarding_state(profile: Dict[str, Any], current_state: str) -> str:
+    if profile.get("language") and profile.get("name") and profile.get("gender") and profile.get("age"):
+        if current_state in [
+            ConversationState.COLLECT_LANGUAGE,
+            ConversationState.COLLECT_NAME,
+            ConversationState.COLLECT_GENDER,
+            ConversationState.COLLECT_AGE,
+        ]:
+            return ConversationState.GREETING
+        return current_state
+
+    if not profile.get("language"):
+        return ConversationState.COLLECT_LANGUAGE
+    if not profile.get("name"):
+        return ConversationState.COLLECT_NAME
+    if not profile.get("gender"):
+        return ConversationState.COLLECT_GENDER
+    if not profile.get("age"):
+        return ConversationState.COLLECT_AGE
+    return current_state
+
+
 def _is_project_related_message(user_text: str) -> bool:
     # Relaxed gatekeeper: let the LLM (nlg_service) handle out-of-scope intelligently
     return True
