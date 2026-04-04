@@ -160,41 +160,48 @@ def _build_fast_reply(
 
 
 def _extract_text_from_image(file_path: str) -> Optional[str]:
-    ocr_api_key = os.getenv("OCR_SPACE_API_KEY", "").strip()
-    if not ocr_api_key:
-        logger.warning("OCR_SPACE_API_KEY is not set, prescription OCR is disabled.")
+    primary_key = os.getenv("OCR_SPACE_API_KEY", "").strip()
+    # Fallback key keeps OCR functional in demo/non-configured environments.
+    candidate_keys = [k for k in [primary_key, "helloworld"] if k]
+
+    if not candidate_keys:
+        logger.warning("No OCR API key available for prescription OCR.")
         return None
 
-    try:
-        with open(file_path, "rb") as file_handle:
-            response = requests.post(
-                "https://api.ocr.space/parse/image",
-                files={"file": file_handle},
-                data={
-                    "apikey": ocr_api_key,
-                    "language": "eng",
-                    "isOverlayRequired": False,
-                    "detectOrientation": True,
-                    "scale": True,
-                    "OCREngine": 2,
-                },
-                timeout=30,
-            )
+    for key in candidate_keys:
+        try:
+            with open(file_path, "rb") as file_handle:
+                response = requests.post(
+                    "https://api.ocr.space/parse/image",
+                    files={"file": file_handle},
+                    data={
+                        "apikey": key,
+                        "language": "eng",
+                        "isOverlayRequired": False,
+                        "detectOrientation": True,
+                        "scale": True,
+                        "OCREngine": 2,
+                    },
+                    timeout=15,
+                )
 
-        payload = response.json()
-        if payload.get("IsErroredOnProcessing"):
-            logger.error(f"OCR processing error: {payload.get('ErrorMessage')}")
-            return None
+            payload = response.json()
+            if payload.get("IsErroredOnProcessing"):
+                logger.warning(f"OCR provider reported error: {payload.get('ErrorMessage')}")
+                continue
 
-        parsed = payload.get("ParsedResults") or []
-        if not parsed:
-            return None
+            parsed = payload.get("ParsedResults") or []
+            if not parsed:
+                continue
 
-        text = (parsed[0].get("ParsedText") or "").strip()
-        return text or None
-    except Exception as exc:
-        logger.error(f"OCR extraction failed: {exc}")
-        return None
+            text = (parsed[0].get("ParsedText") or "").strip()
+            if text:
+                return text
+        except Exception as exc:
+            logger.warning(f"OCR extraction attempt failed: {exc}")
+            continue
+
+    return None
 
 
 def _extract_medicine_candidates_from_text(ocr_text: str) -> List[str]:
@@ -512,12 +519,14 @@ async def upload_prescription_fast(
         return {"status": "error", "message": "user_id is required"}
 
     content_type = (file.content_type or "").lower()
-    if not content_type.startswith("image/"):
+    extension = os.path.splitext(file.filename or "")[1].lower()
+    image_exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic"}
+    if (content_type and not content_type.startswith("image/")) and extension not in image_exts:
         return {"status": "error", "message": "Please upload image files only (jpg/png/webp)."}
 
     uploads_dir = os.path.join("uploads", "prescriptions")
     os.makedirs(uploads_dir, exist_ok=True)
-    extension = os.path.splitext(file.filename or "")[1] or ".jpg"
+    extension = extension or ".jpg"
     safe_name = f"{user_number.replace(':', '_').replace('+', '')}_{uuid.uuid4().hex[:10]}{extension}"
     file_path = os.path.join(uploads_dir, safe_name)
 
