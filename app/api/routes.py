@@ -46,25 +46,26 @@ class FastChatRequest(BaseModel):
 
 
 def _resolve_onboarding_state(profile: Dict[str, Any], current_state: str) -> str:
-    if profile.get("language") and profile.get("name") and profile.get("gender") and profile.get("age"):
-        if current_state in [
-            ConversationState.COLLECT_LANGUAGE,
-            ConversationState.COLLECT_NAME,
-            ConversationState.COLLECT_GENDER,
-            ConversationState.COLLECT_AGE,
-        ]:
-            return ConversationState.GREETING
-        return current_state
-
+    # App fast chat has language-only onboarding.
     if not profile.get("language"):
         return ConversationState.COLLECT_LANGUAGE
-    if not profile.get("name"):
-        return ConversationState.COLLECT_NAME
-    if not profile.get("gender"):
-        return ConversationState.COLLECT_GENDER
-    if not profile.get("age"):
-        return ConversationState.COLLECT_AGE
+    if current_state in [
+        ConversationState.COLLECT_LANGUAGE,
+        ConversationState.COLLECT_NAME,
+        ConversationState.COLLECT_GENDER,
+        ConversationState.COLLECT_AGE,
+    ]:
+        return ConversationState.GREETING
     return current_state
+
+
+def _norm_lang(lang_value: Optional[str]) -> str:
+    raw = (lang_value or "").strip().lower()
+    if "hind" in raw or "हिं" in raw:
+        return "hindi"
+    if "mara" in raw or "मराठ" in raw:
+        return "marathi"
+    return "english"
 
 
 def _build_fast_reply(
@@ -76,17 +77,38 @@ def _build_fast_reply(
     name = profile.get("name") or "Friend"
     med = temp_data.get("medicine_name") or "medicine"
     qty = temp_data.get("quantity") or 1
+    lang = _norm_lang(profile.get("language"))
 
     if backend_command in ["ask_language", "ask_language_again"]:
+        if lang == "hindi":
+            return "संजीवनी में आपका स्वागत है। कृपया भाषा चुनें: English / Hindi / Marathi."
+        if lang == "marathi":
+            return "संजीवनीमध्ये स्वागत आहे. कृपया भाषा निवडा: English / Hindi / Marathi."
         return "Welcome to Sanjeevani. Please choose language: English / Hindi / Marathi."
     if backend_command in ["ask_name", "ask_name_again"]:
-        return "Please share your full name."
+        if lang == "hindi":
+            return "ठीक है। अब दवाइयों का नाम और मात्रा बताइए।"
+        if lang == "marathi":
+            return "ठीक आहे. आता औषधाचे नाव आणि प्रमाण सांगा."
+        return "Great. Now tell me medicine name and quantity."
     if backend_command in ["ask_gender", "ask_gender_again"]:
-        return "Please share your gender: Male / Female / Other."
+        if lang == "hindi":
+            return "दवाइयों का नाम और मात्रा बताइए।"
+        if lang == "marathi":
+            return "औषधाचे नाव आणि प्रमाण सांगा."
+        return "Please tell me medicine name and quantity."
     if backend_command in ["ask_age", "ask_age_again"]:
-        return "Please share your age."
+        if lang == "hindi":
+            return "दवाइयों का नाम और मात्रा बताइए।"
+        if lang == "marathi":
+            return "औषधाचे नाव आणि प्रमाण सांगा."
+        return "Please tell me medicine name and quantity."
     if backend_command == "registration_complete":
-        return f"Registration complete, {name}. Tell me which medicine you want to order."
+        if lang == "hindi":
+            return f"भाषा सेट हो गई, {name}. अब बताइए कौन सी दवा चाहिए।"
+        if lang == "marathi":
+            return f"भाषा सेट झाली, {name}. आता कोणते औषध हवे ते सांगा."
+        return f"Language set, {name}. Tell me which medicine you want to order."
     if backend_command in ["ask_quantity", "ask_quantity_again"]:
         return f"How many units of {med} do you need?"
     if backend_command in ["ask_order_confirmation", "ask_order_confirmation_again"]:
@@ -264,6 +286,29 @@ async def chat_fast(body: FastChatRequest):
             temp_data=temp_data,
             user_text=user_text,
         )
+
+    # Fast app onboarding policy:
+    # language only -> skip name/gender/age collection entirely.
+    if backend_command in [
+        "ask_name",
+        "ask_name_again",
+        "ask_gender",
+        "ask_gender_again",
+        "ask_age",
+        "ask_age_again",
+    ]:
+        backend_command = "registration_complete"
+        new_state = ConversationState.GREETING
+
+    # Normalize quick language choices even if NLU misses them.
+    if current_state == ConversationState.COLLECT_LANGUAGE and not nlu_result.extracted_user_fields.language:
+        lowered = user_text.lower()
+        if "eng" in lowered:
+            nlu_result.extracted_user_fields.language = "English"
+        elif "hind" in lowered or "हिं" in user_text:
+            nlu_result.extracted_user_fields.language = "Hindi"
+        elif "mara" in lowered or "मराठ" in user_text:
+            nlu_result.extracted_user_fields.language = "Marathi"
 
     if any(val is not None for val in nlu_result.extracted_user_fields.model_dump().values()):
         await update_user_profile(user_number, nlu_result.extracted_user_fields.model_dump(exclude_none=True))
