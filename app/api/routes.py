@@ -11,6 +11,7 @@ from ..core.config import DEFAULT_PHARMACY_ID, META_VERIFY_TOKEN, VERIFY_TOKEN
 from ..core.logger import logger
 from ..models.enums import ConversationState
 from ..services.db_service import (
+    create_order,
     ensure_order_indexes,
     get_conversation_state,
     get_recent_orders,
@@ -42,6 +43,34 @@ class FastChatRequest(BaseModel):
     pharmacy_id: Optional[str] = None
     interactive_data: Optional[str] = None
     session_id: Optional[str] = None
+
+
+def _is_project_related_message(user_text: str) -> bool:
+    lower = (user_text or "").strip().lower()
+    if not lower:
+        return True
+    keywords = [
+        "sanjeevani",
+        "pharmacy",
+        "medicine",
+        "medicines",
+        "order",
+        "track",
+        "delivery",
+        "prescription",
+        "tablet",
+        "capsule",
+        "syrup",
+        "stock",
+        "inventory",
+        "price",
+        "drug",
+        "chemist",
+        "patient",
+        "doctor",
+        "rx",
+    ]
+    return any(k in lower for k in keywords)
 
 
 def _resolve_language_only_state(profile: Dict[str, Any], current_state: str) -> str:
@@ -131,6 +160,18 @@ def _build_fast_reply(
         return (
             f"Request captured. Inventory check complete. Sent to Sanjeevani System for pharmacist confirmation. "
             f"Reference: {ref}."
+        )
+    if backend_command == "order_placed":
+        order_id = temp_data.get("order_id", "PENDING")
+        return (
+            f"Order placed successfully in Sanjeevani. "
+            f"Order ID: {order_id}. "
+            f"You can now track this order."
+        )
+    if backend_command == "project_scope_only":
+        return (
+            "I can help only with Sanjeevani project tasks: medicine orders, prescription upload, "
+            "pharmacy details, delivery tracking, and order status."
         )
     if backend_command == "show_tracking":
         if not recent_orders:
@@ -377,8 +418,38 @@ async def _run_conversation_turn(
         new_temp["available_addresses"] = [{k: v for k, v in a.items() if k != "_id"} for a in addresses]
 
     if backend_command == "finalize_order":
-        backend_command = "handoff_to_system_for_confirmation"
-        new_temp["handoff_reference"] = f"REQ-{uuid.uuid4().hex[:8].upper()}"
+        handoff_ref = new_temp.get("handoff_reference") or f"REQ-{uuid.uuid4().hex[:8].upper()}"
+        new_temp["handoff_reference"] = handoff_ref
+
+        med = (new_temp.get("medicine_name") or "").strip()
+        qty = int(new_temp.get("quantity") or 1)
+        addr = (new_temp.get("address_info") or {}).get("full_address") or "Local Pickup / Pending"
+        patient_name = profile.get("name") or "Customer"
+
+        created_order_id = None
+        if med:
+            created_order_id = await create_order(
+                user_number,
+                {
+                    "patient_name": patient_name,
+                    "medicine_name": med,
+                    "quantity": qty,
+                    "delivery_address": addr,
+                    "pharmacy_id": resolved_pharmacy_id or DEFAULT_PHARMACY_ID,
+                    "merchant_id": resolved_pharmacy_id or DEFAULT_PHARMACY_ID,
+                    "source_channel": "app" if app_mode else "whatsapp",
+                    "source_provider": provider,
+                    "source_message_id": handoff_ref,
+                    "order_channel": "Sanjeevani App" if app_mode else "WhatsApp",
+                    "payment_method": "Unpaid",
+                },
+            )
+
+        if created_order_id:
+            new_temp["order_id"] = created_order_id
+            backend_command = "order_placed"
+        else:
+            backend_command = "handoff_to_system_for_confirmation"
         await update_conversation_state(user_number, ConversationState.GREETING, {})
     else:
         await update_conversation_state(user_number, new_state, new_temp)
@@ -400,6 +471,23 @@ async def chat_fast(body: FastChatRequest):
 
     if not user_number or not user_text:
         return {"status": "error", "message": "user_id and message are required"}
+
+    if not _is_project_related_message(user_text):
+        return {
+            "status": "success",
+            "text": _build_fast_reply("project_scope_only", {}, {}, []),
+            "reply": _build_fast_reply("project_scope_only", {}, {}, []),
+            "state": str(ConversationState.GREETING),
+            "session_id": body.session_id or user_number,
+            "backend_command": "project_scope_only",
+            "pharmacy_id": (body.pharmacy_id or "").strip() or DEFAULT_PHARMACY_ID,
+            "extracted_data": {
+                "medicine_name": None,
+                "quantity": None,
+                "handoff_reference": None,
+                "order_id": None,
+            },
+        }
 
     profile = await get_user_profile(user_number) or {"user_id": user_number}
     state_doc = await get_conversation_state(user_number)
@@ -439,6 +527,7 @@ async def chat_fast(body: FastChatRequest):
             "medicine_name": new_temp.get("medicine_name"),
             "quantity": new_temp.get("quantity"),
             "handoff_reference": new_temp.get("handoff_reference"),
+            "order_id": new_temp.get("order_id"),
         },
     }
 
