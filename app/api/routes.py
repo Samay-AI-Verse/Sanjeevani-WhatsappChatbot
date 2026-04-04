@@ -7,7 +7,7 @@ import requests
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from pydantic import BaseModel
 
-from ..core.config import DEFAULT_PHARMACY_ID, META_VERIFY_TOKEN, VERIFY_TOKEN
+from ..core.config import DEFAULT_PHARMACY_ID, META_VERIFY_TOKEN, VERIFY_TOKEN, META_ACCESS_TOKEN
 from ..core.logger import logger
 from ..models.enums import ConversationState
 from ..services.db_service import (
@@ -660,6 +660,9 @@ async def handle_message(request: Request):
     user_text = data.get("Body", "")
     source_message_id = data.get("MessageSid")
 
+    media_url = data.get("MediaUrl0")
+    media_content_type = data.get("MediaContentType0", "")
+
     if not user_number or not user_text:
         try:
             json_data = await request.json()
@@ -668,6 +671,59 @@ async def handle_message(request: Request):
             source_message_id = source_message_id or json_data.get("MessageSid")
         except Exception:
             pass
+
+    if not user_number and not user_text and not media_url:
+        return {"status": "ignored"}
+
+    if media_url and media_content_type.startswith("image/"):
+        try:
+            img_resp = requests.get(media_url, timeout=15)
+            if img_resp.status_code == 200:
+                uploads_dir = os.path.join("uploads", "prescriptions")
+                os.makedirs(uploads_dir, exist_ok=True)
+                safe_name = f"{user_number.replace(':', '_').replace('+', '')}_{uuid.uuid4().hex[:10]}.jpg"
+                file_path = os.path.join(uploads_dir, safe_name)
+                with open(file_path, "wb") as f:
+                    f.write(img_resp.content)
+                
+                # Process image
+                ocr_text = _extract_text_from_image(file_path)
+                if ocr_text:
+                    nlu_result = extract_nlu(ocr_text, ConversationState.AWAITING_PRESCRIPTION)
+                    names_from_nlu = [item.name for item in (nlu_result.items or []) if item.name]
+                    candidates = names_from_nlu or _extract_medicine_candidates_from_text(ocr_text)
+                    
+                    matcher = MedicineMatcher()
+                    extracted_names = []
+                    seen = set()
+                    for c in candidates:
+                        k = c.strip().lower()
+                        if k and k not in seen:
+                            seen.add(k)
+                            # since find_match is async, we need await
+                            m = await matcher.find_match(c)
+                            if m: extracted_names.append(m.get("name", c))
+                    
+                    if extracted_names:
+                        med_names_str = ", ".join(extracted_names)
+                        user_text = f"I want {med_names_str}"
+                        
+                        # Save state that prescription is uploaded
+                        state_doc = await get_conversation_state(user_number)
+                        temp_data = state_doc.get("temp_data", {})
+                        temp_data["prescription_uploaded"] = True
+                        temp_data["prescription_file"] = safe_name
+                        await update_conversation_state(user_number, state_doc.get("state", ConversationState.GREETING), temp_data)
+                        
+                        send_whatsapp_text(user_number, f"Prescription scanned! Extracted: {med_names_str}. Let me check the stock...", provider="twilio")
+                    else:
+                        send_whatsapp_text(user_number, "Prescription scanned, but no clear medicines found. Please type the names.", provider="twilio")
+                        return {"status": "success", "source_message_id": source_message_id}
+                else:
+                    send_whatsapp_text(user_number, "I couldn't read the prescription. Please send a clearer image.", provider="twilio")
+                    return {"status": "success", "source_message_id": source_message_id}
+        except Exception as e:
+            logger.error(f"Image download/processing failed: {e}")
 
     if not user_number or not user_text:
         return {"status": "ignored"}
@@ -733,6 +789,60 @@ async def handle_meta_message(request: Request):
 
         if msg["type"] == "text":
             user_text = msg["text"]["body"]
+        elif msg["type"] == "image":
+            media_id = msg["image"]["id"]
+            if META_ACCESS_TOKEN:
+                try:
+                    headers = {"Authorization": f"Bearer {META_ACCESS_TOKEN}"}
+                    info_url = f"https://graph.facebook.com/v17.0/{media_id}"
+                    info_resp = requests.get(info_url, headers=headers, timeout=15)
+                    if info_resp.status_code == 200:
+                        download_url = info_resp.json().get("url")
+                        if download_url:
+                            img_resp = requests.get(download_url, headers=headers, timeout=20)
+                            if img_resp.status_code == 200:
+                                uploads_dir = os.path.join("uploads", "prescriptions")
+                                os.makedirs(uploads_dir, exist_ok=True)
+                                safe_name = f"{user_number.replace(':', '_').replace('+', '')}_{uuid.uuid4().hex[:10]}.jpg"
+                                file_path = os.path.join(uploads_dir, safe_name)
+                                with open(file_path, "wb") as f:
+                                    f.write(img_resp.content)
+                                
+                                ocr_text = _extract_text_from_image(file_path)
+                                if ocr_text:
+                                    nlu_result = extract_nlu(ocr_text, ConversationState.AWAITING_PRESCRIPTION)
+                                    names_from_nlu = [item.name for item in (nlu_result.items or []) if item.name]
+                                    candidates = names_from_nlu or _extract_medicine_candidates_from_text(ocr_text)
+                                    
+                                    matcher = MedicineMatcher()
+                                    extracted_names = []
+                                    seen = set()
+                                    for c in candidates:
+                                        k = c.strip().lower()
+                                        if k and k not in seen:
+                                            seen.add(k)
+                                            m = await matcher.find_match(c)
+                                            if m: extracted_names.append(m.get("name", c))
+                                    
+                                    if extracted_names:
+                                        med_names_str = ", ".join(extracted_names)
+                                        user_text = f"I want {med_names_str}"
+                                        
+                                        state_doc = await get_conversation_state(user_number)
+                                        temp_data = state_doc.get("temp_data", {})
+                                        temp_data["prescription_uploaded"] = True
+                                        temp_data["prescription_file"] = safe_name
+                                        await update_conversation_state(user_number, state_doc.get("state", ConversationState.GREETING), temp_data)
+                                        
+                                        send_whatsapp_text_meta(user_number, f"Prescription scanned! Extracted: {med_names_str}. Let me check the stock...")
+                                    else:
+                                        send_whatsapp_text_meta(user_number, "Prescription scanned, but no clear medicines found. Please type the names.")
+                                        return {"status": "success"}
+                                else:
+                                    send_whatsapp_text_meta(user_number, "I couldn't read the prescription. Please send a clearer image.")
+                                    return {"status": "success"}
+                except Exception as e:
+                    logger.error(f"Meta image processing failed: {e}")
         elif msg["type"] == "interactive":
             interactive = msg["interactive"]
             if interactive["type"] == "button_reply":
