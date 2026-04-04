@@ -45,142 +45,34 @@ class FastChatRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+from ..services.nlg_service import generate_and_send_response, generate_response_text
+
 def _is_project_related_message(user_text: str) -> bool:
-    lower = (user_text or "").strip().lower()
-    if not lower:
-        return True
-    keywords = [
-        "sanjeevani",
-        "pharmacy",
-        "medicine",
-        "medicines",
-        "order",
-        "track",
-        "delivery",
-        "prescription",
-        "tablet",
-        "capsule",
-        "syrup",
-        "stock",
-        "inventory",
-        "price",
-        "drug",
-        "chemist",
-        "patient",
-        "doctor",
-        "rx",
-    ]
-    return any(k in lower for k in keywords)
-
-
-def _resolve_language_only_state(profile: Dict[str, Any], current_state: str) -> str:
-    if not profile.get("language"):
-        return ConversationState.COLLECT_LANGUAGE
-    if current_state in [
-        ConversationState.COLLECT_LANGUAGE,
-        ConversationState.COLLECT_NAME,
-        ConversationState.COLLECT_GENDER,
-        ConversationState.COLLECT_AGE,
-    ]:
-        return ConversationState.GREETING
-    return current_state
-
-
-def _resolve_full_onboarding_state(profile: Dict[str, Any], current_state: str) -> str:
-    if profile.get("language") and profile.get("name") and profile.get("gender") and profile.get("age"):
-        if current_state in [
-            ConversationState.COLLECT_LANGUAGE,
-            ConversationState.COLLECT_NAME,
-            ConversationState.COLLECT_GENDER,
-            ConversationState.COLLECT_AGE,
-        ]:
-            return ConversationState.GREETING
-        return current_state
-
-    if not profile.get("language"):
-        return ConversationState.COLLECT_LANGUAGE
-    if not profile.get("name"):
-        return ConversationState.COLLECT_NAME
-    if not profile.get("gender"):
-        return ConversationState.COLLECT_GENDER
-    if not profile.get("age"):
-        return ConversationState.COLLECT_AGE
-    return current_state
-
-
-def _norm_lang(lang_value: Optional[str]) -> str:
-    raw = (lang_value or "").strip().lower()
-    if "hind" in raw or "???" in raw:
-        return "hindi"
-    if "mara" in raw or "????" in raw:
-        return "marathi"
-    return "english"
-
+    # Relaxed gatekeeper: let the LLM (nlg_service) handle out-of-scope intelligently
+    return True
 
 def _build_fast_reply(
     backend_command: str,
     profile: Dict[str, Any],
     temp_data: Dict[str, Any],
     recent_orders: List[Dict[str, Any]],
+    user_text: str = ""
 ) -> str:
-    name = profile.get("name") or "Friend"
-    med = temp_data.get("medicine_name") or "medicine"
-    qty = temp_data.get("quantity") or 1
-    lang = _norm_lang(profile.get("language"))
-
-    if backend_command in ["ask_language", "ask_language_again"]:
-        if lang == "hindi":
-            return "??????? ??? ???? ?????? ??? ????? ???? ?????: English / Hindi / Marathi."
-        if lang == "marathi":
-            return "???????????? ?????? ???. ????? ???? ?????: English / Hindi / Marathi."
-        return "Welcome to Sanjeevani. Please choose language: English / Hindi / Marathi."
-    if backend_command in ["registration_complete", "welcome_user"]:
-        if lang == "hindi":
-            return f"???? ??? ?? ??, {name}. ?? ??? ?? ??? ?? ?????? ??????"
-        if lang == "marathi":
-            return f"???? ??? ????, {name}. ??? ?????? ??? ??? ?????? ?????."
-        return f"Language set, {name}. Tell me medicine name and quantity."
-    if backend_command in ["ask_quantity", "ask_quantity_again"]:
-        return f"How many units of {med} do you need?"
-    if backend_command in ["ask_order_confirmation", "ask_order_confirmation_again"]:
-        findings = temp_data.get("agent_findings") or {}
-        stock_rows = findings.get("items") or []
-        out_items = [i.get("medicine_name") for i in stock_rows if not i.get("in_stock")]
-        if out_items:
-            return f"Some items are out of stock ({', '.join(out_items)}). Please change item/quantity."
-        return f"Inventory checked for {med} x {qty}. Share delivery address to send for pharmacist confirmation."
-    if backend_command in ["ask_address_selection", "ask_full_address"]:
-        return "Please share your full delivery address."
-    if backend_command in ["ask_prescription_strict", "ask_prescription_strict_again"]:
-        return "Prescription is required. Please upload a clear prescription image."
-    if backend_command == "inventory_check_failed":
-        return "Some requested items are out of stock right now. Please change medicine or quantity and try again."
-    if backend_command == "handoff_to_system_for_confirmation":
-        ref = temp_data.get("handoff_reference", "PENDING")
-        return (
-            f"Request captured. Inventory check complete. Sent to Sanjeevani System for pharmacist confirmation. "
-            f"Reference: {ref}."
-        )
-    if backend_command == "order_placed":
-        order_id = temp_data.get("order_id", "PENDING")
-        return (
-            f"Order placed successfully in Sanjeevani. "
-            f"Order ID: {order_id}. "
-            f"You can now track this order."
-        )
-    if backend_command == "project_scope_only":
-        return (
-            "I can help only with Sanjeevani project tasks: medicine orders, prescription upload, "
-            "pharmacy details, delivery tracking, and order status."
-        )
-    if backend_command == "show_tracking":
-        if not recent_orders:
-            return "No recent orders found."
-        top = recent_orders[0]
-        return f"Latest order {top.get('order_id')} is {top.get('status')}."
-    if backend_command == "acknowledge_cancel":
-        return "Okay, cancelled. How can I help you now?"
-    return "Tell me medicine name and quantity, or upload a prescription image."
+    # Use the shared NLG logic for both App and WhatsApp
+    resp = generate_response_text(backend_command, profile, temp_data, recent_orders, user_text)
+    
+    txt = resp.get("text", "")
+    
+    # Optional: append buttons if available for APP UI rendering (ChatbotPage in Flutter can parse this if needed in the future, currently we just render text)
+    btns = resp.get("buttons")
+    if btns:
+        txt += "\n\nOptions:\n" + "\n".join([f"👉 {b['title']}" for b in btns])
+        
+    items = resp.get("list_items")
+    if items:
+        txt += "\n\n" + "\n".join([f"• {i['title']}" for i in items])
+        
+    return txt
 
 
 def _extract_text_from_image(file_path: str) -> Optional[str]:
@@ -472,23 +364,6 @@ async def chat_fast(body: FastChatRequest):
     if not user_number or not user_text:
         return {"status": "error", "message": "user_id and message are required"}
 
-    if not _is_project_related_message(user_text):
-        return {
-            "status": "success",
-            "text": _build_fast_reply("project_scope_only", {}, {}, []),
-            "reply": _build_fast_reply("project_scope_only", {}, {}, []),
-            "state": str(ConversationState.GREETING),
-            "session_id": body.session_id or user_number,
-            "backend_command": "project_scope_only",
-            "pharmacy_id": (body.pharmacy_id or "").strip() or DEFAULT_PHARMACY_ID,
-            "extracted_data": {
-                "medicine_name": None,
-                "quantity": None,
-                "handoff_reference": None,
-                "order_id": None,
-            },
-        }
-
     profile = await get_user_profile(user_number) or {"user_id": user_number}
     state_doc = await get_conversation_state(user_number)
     resolved_pharmacy_id = (
@@ -499,7 +374,8 @@ async def chat_fast(body: FastChatRequest):
     if resolved_pharmacy_id:
         await bind_channel_to_pharmacy(channel="app", channel_user_id=user_number, pharmacy_id=resolved_pharmacy_id)
 
-    current_state = _resolve_language_only_state(profile, state_doc.get("state", ConversationState.COLLECT_LANGUAGE))
+    # Note: Using _resolve_full_onboarding_state instead of language_only to match WhatsApp identical flow.
+    current_state = _resolve_full_onboarding_state(profile, state_doc.get("state", ConversationState.COLLECT_LANGUAGE))
     temp_data = state_doc.get("temp_data", {})
 
     backend_command, new_state, new_temp, profile, recent_orders = await _run_conversation_turn(
@@ -514,7 +390,7 @@ async def chat_fast(body: FastChatRequest):
         provider="app",
     )
 
-    reply = _build_fast_reply(backend_command, profile, new_temp, recent_orders)
+    reply = _build_fast_reply(backend_command, profile, new_temp, recent_orders, user_text=user_text)
     return {
         "status": "success",
         "text": reply,
