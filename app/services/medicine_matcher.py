@@ -1,8 +1,6 @@
 from typing import List, Dict, Any, Optional
-from app.database.mongo_client import get_db
-from app.utils.logger import get_logger
-
-logger = get_logger(__name__)
+from ..core.database import db
+from ..core.logger import logger
 
 class MedicineMatcher:
     """
@@ -12,13 +10,10 @@ class MedicineMatcher:
     """
 
     def __init__(self):
-        self._db = None
+        self._db = db
 
     @property
     def db(self):
-        if self._db is None:
-            from ..services.db_service import get_db_instance
-            self._db = get_db_instance()
         return self._db
 
     async def find_match(self, user_input: str) -> Optional[Dict[str, Any]]:
@@ -28,6 +23,10 @@ class MedicineMatcher:
         1. Exact Match (Cleaned)
         2. Atlas Search / Regex Match
         """
+        if self.db is None:
+            logger.error("MedicineMatcher: database connection is not initialized")
+            return None
+            
         clean_input = user_input.strip().lower()
         
         # 1. Exact Match
@@ -40,13 +39,6 @@ class MedicineMatcher:
             }
             
         # 2. Regex Fallback (Fuzzy-ish)
-        # In a real Atlas environment, we would use $search stage here.
-        # Example Atlas Search Stage (User must create index 'medicine_search' on 'brand_name'):
-        # [
-        #   { "$search": { "index": "medicine_search", "text": { "query": user_input, "path": "brand_name", "fuzzy": {} } } },
-        #   { "$limit": 1 }
-        # ]
-        
         cursor = self.db["medicine_master"].find({
             "brand_name": {"$regex": f"{user_input}", "$options": "i"}
         }).limit(1)
@@ -59,3 +51,4 @@ class MedicineMatcher:
             }
 
         return None
+

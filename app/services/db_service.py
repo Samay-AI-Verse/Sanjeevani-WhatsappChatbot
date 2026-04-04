@@ -170,13 +170,15 @@ async def create_order(phone: str, order_info: Dict):
         "Order ID": order_id,
         "Patient Name": order_info.get("patient_name") or order_info.get("name") or "Customer",
         "Medicine Name": order_info.get("medicine_name"),
-        "Quantity": quantity,
+        "Quantity Ordered": quantity,
+        "Unit Price": price,
         "Total Amount": quantity * price,
         "Order Status": "Pending",
         "Order Channel": order_info.get("order_channel") or ("WhatsApp" if source_channel == "whatsapp" else "Sanjeevani App"),
         "Order Date": datetime.utcnow(),
         "Payment Method": order_info.get("payment_method", "Unpaid"),
         "Contact Number": phone,
+
         # Source metadata
         "source_channel": source_channel,
         "source_provider": source_provider,
