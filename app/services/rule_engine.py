@@ -172,6 +172,12 @@ class RuleEngine:
                 temp_data["address_info"]["landmark"] = user_text
             return ConversationState.CONFIRM_SAVED_ADDRESS, temp_data, "ask_save_address"
             
+        if current_state == ConversationState.AWAITING_PRESCRIPTION:
+            if nlu_result.user_message_type == "image" or nlu_result.prescription_check_needed:
+                # In a real app, we'd verify the image. For now, assume upload = next step.
+                return ConversationState.CONFIRM_ORDER, temp_data, "prescription_uploaded_success"
+            return ConversationState.AWAITING_PRESCRIPTION, temp_data, "ask_prescription_strict_again"
+
         if current_state == ConversationState.FINALIZE_ORDER:
             return ConversationState.GREETING, {}, "finalize_order"
 

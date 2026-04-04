@@ -26,3 +26,4 @@ class ConversationState(str, Enum):
     FINALIZE_ORDER = "finalize_order"
     TRACK_ORDER = "track_order"
     HANDOFF_TO_HUMAN = "handoff_to_human"
+    AWAITING_PRESCRIPTION = "awaiting_prescription"

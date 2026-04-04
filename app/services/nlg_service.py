@@ -41,8 +41,6 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
     name = user_profile.get("name", "")
     
     # --- NAME SANITIZATION ---
-    # If the name looks like a gender label (common mistake during registration),
-    # replace it with a generic friendly term.
     gender_labels = ["male", "female", "other", "पुरुष", "महिला", "अन्य"]
     if any(label in name.lower() for label in gender_labels) and len(name.split()) <= 3:
         name = "Friend" if language == "english" else ("दोस्त" if language == "hindi" else "मित्र")
@@ -65,8 +63,6 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
 
     if backend_command in ["ask_gender", "ask_gender_again"]:
         msg = f"Nice to meet you, *{name}*! What is your gender?" if language == "english" else f"आपसे मिलकर अच्छा लगा, *{name}*! आपका लिंग क्या है?"
-        
-        # Note: Meta button IDs must be unique and short
         buttons = [
             {"id": "gender_male", "title": "Male / पुरुष"},
             {"id": "gender_female", "title": "Female / महिला"},
@@ -103,12 +99,17 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
         return
 
     if backend_command in ["ask_order_confirmation", "ask_order_confirmation_again"]:
+        findings = temp_data.get("agent_findings", {})
+        refill_nudge = findings.get("refill_nudge", "")
         med = temp_data.get("medicine_name")
         qty = temp_data.get("quantity")
         price = temp_data.get("price", 250)
         total = int(qty) * price
         
-        summary = f"✨ *Order Summary* ✨\n--------------------------\n💊 *Medicine:* {med}\n📊 *Quantity:* {qty}\n💰 *Estimated Price:* ₹{total}\n🚚 *Delivery:* Home Delivery\n--------------------------\n*Confirm your medicine details?*"
+        summary = f"✨ *Order Summary* ✨\n--------------------------\n💊 *Medicine:* {med}\n📊 *Quantity:* {qty}\n💰 *Estimated Price:* ₹{total}\n🚚 *Delivery:* Home Delivery\n--------------------------\n"
+        if refill_nudge:
+            summary += f"🔔 *Refill Reminder:* {refill_nudge}\n--------------------------\n"
+        summary += "*Confirm your order details?*"
         
         buttons = [
             {"id": "confirm_order", "title": "✅ Confirm & Set Address"},
@@ -117,9 +118,25 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
         send_buttons(to_number, summary, buttons)
         return
 
+    # --- SAFETY / PRESCRIPTION ---
+    if backend_command in ["ask_prescription_strict", "ask_prescription_strict_again"]:
+        if language == "hindi":
+            msg = "⚠️ *प्रिस्क्रिप्शन आवश्यक है!* \n\nआपकी ऑर्डर में कुछ ऐसी दवाएं हैं जिनके लिए डॉक्टर का पर्चा अनिवार्य है। कृपया अपने प्रिस्क्रिप्शन की एक साफ़ फोटो यहाँ भेजें। 📸"
+        else:
+            msg = "⚠️ *Prescription Required!* \n\nYour order contains restricted medications (e.g., Habit-forming). Please upload a clear photo of your doctor's prescription to continue. 📸"
+        send_text(to_number, msg)
+        return
+
+    if backend_command == "prescription_uploaded_success":
+        if language == "hindi":
+            msg = "✅ *प्रिस्क्रिप्शन प्राप्त हुआ!* \n\nधन्यवाद। हमारे फार्मासिस्ट इसे सत्यापित करेंगे। अब हम आपकी ऑर्डर की पुष्टि कर सकते हैं।"
+        else:
+            msg = "✅ *Prescription Received!* \n\nThank you. Our pharmacist will verify it shortly. Let's proceed with your order summary."
+        send_text(to_number, msg)
+        return
+
     # --- ADDRESS COLLECTION ---
     if backend_command == "ask_address_selection":
-        # Check if we have addresses in temp_data (passed from route)
         addresses = temp_data.get("available_addresses", [])
         if addresses:
             msg = "📍 Please select a delivery address or add a new one:" if language == "english" else "📍 कृपया डिलीवरी पता चुनें या नया जोड़ें:"
@@ -138,34 +155,6 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
         send_text(to_number, msg)
         return
 
-    if backend_command == "ask_address_line2":
-        msg = "Enter *Address Line 2* (Area/locality) or type 'Skip':" if language == "english" else "*पता लाइन 2* (क्षेत्र/इलाका) दर्ज करें या 'Skip' लिखें:"
-        send_text(to_number, msg)
-        return
-
-    if backend_command == "ask_city":
-        msg = "Enter your *City*:" if language == "english" else "अपना *शहर* दर्ज करें:"
-        send_text(to_number, msg)
-        return
-
-    if backend_command == "ask_state":
-        msg = "Enter your *State*:" if language == "english" else "अपना *राज्य* दर्ज करें:"
-        send_text(to_number, msg)
-        return
-
-    if backend_command in ["ask_pincode", "ask_pincode_again"]:
-        if backend_command == "ask_pincode_again":
-            msg = "❌ Invalid pincode. Please enter 6 digits:" if language == "english" else "❌ गलत पिनकोड। कृपया 6 अंक दर्ज करें:"
-        else:
-            msg = "Enter your *Pincode* (6 digits):" if language == "english" else "अपना *पिनकोड* (6 अंक) दर्ज करें:"
-        send_text(to_number, msg)
-        return
-
-    if backend_command == "ask_landmark":
-        msg = "Enter a *Landmark* (Optional) or type 'Skip':" if language == "english" else "एक *लैंडमार्क* (वैकल्पिक) दर्ज करें या 'Skip' लिखें:"
-        send_text(to_number, msg)
-        return
-
     if backend_command == "ask_save_address":
         address_str = format_address_string(temp_data.get("address_info", {}))
         msg = f"📍 *Confirm Delivery Address:*\n\n{address_str}\n\nWould you like to save this for future orders?" if language == "english" else f"📍 *डिलीवरी पता पुष्ट करें:*\n\n{address_str}\n\nक्या आप इसे भविष्य के लिए सुरक्षित करना चाहेंगे?"
@@ -179,20 +168,12 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
     if backend_command == "finalize_order":
         order_id = temp_data.get("order_id", "PENDING")
         address_str = format_address_string(temp_data.get("address_info", {}))
-        pharm_id = temp_data.get("pharmacy_id") or "Unknown"
-        
-        # Extract DB name from env for display
-        db_name = os.getenv("MONGODB_DB_NAME", "pharmacy_management")
-
         msg = (
             f"🙌 *Order Confirmed!* \n\n"
             f"Thank you, *{name}*. Your order is being processed. 🚚\n\n"
             f"🆔 *Order ID:* #{order_id}\n"
             f"📍 *Status:* In Progress\n"
             f"📍 *Delivering to:* {address_str}\n\n"
-            f"⚠️ *Debug Info:* \n"
-            f"• Target Pharmacy: `{pharm_id}`\n"
-            f"• Database: `{db_name}`\n\n"
             f"Stay healthy! ✨"
         )
         send_text(to_number, msg)
@@ -212,10 +193,8 @@ def generate_and_send_response(to_number: str, backend_command: str, user_profil
             send_text(to_number, f"Here are your recent orders:\n\n{order_list}")
         return
 
-
     # --- GENERAL (Conversational Chatbot Fallback) ---
     if backend_command in ["general_greeting_or_fallback", "fallback_general"]:
-        # Use our LLM specifically for casual chat
         msg = get_conversational_reply(user_text, user_profile)
         send_text(to_number, msg)
         return

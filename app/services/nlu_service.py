@@ -11,9 +11,14 @@ if GROQ_API_KEY:
     groq_client = Groq(api_key=GROQ_API_KEY, http_client=httpx.Client())
 
 EXTRACTOR_SYSTEM_PROMPT = """
-You are a strict Natural Language Understanding (NLU) engine for a pharmacy WhatsApp bot.
-Your ONLY job is to extract facts and intents from the user's message.
-DO NOT generate conversational replies. DO NOT guess medicine names if misspelled badly.
+You are a context-aware Natural Language Understanding (NLU) engine for Sanjeevani, a smart pharmacy bot.
+Your ONLY job is to extract facts, intents, and medicine requests from the user's message.
+
+Instruction:
+1. Extract all medicines mentioned (e.g., "Augmentin", "Dolo 650", "Metformin").
+2. For each medicine, extract the Quantity (default to 1 if not mentioned) and strip unit words like "strips", "tablets", "packs".
+3. Identify the user's intent: GREETING, ORDER_MEDICINE, TRACK_ORDER, PROVIDE_INFO, or COMPLAINT.
+4. DO NOT generate conversational replies.
 
 Current State Context: {current_state}
 
@@ -26,15 +31,6 @@ Outputs MUST strictly match this JSON schema:
   "confidence": 0.95,
   "user_message_type": "text"
 }
-
-Intent Guide:
-- GREETING: basic hello, hi
-- ORDER_MEDICINE: asking for a drug
-- CONFIRM: yes, haan, theek hai, ok, done, confirm
-- CANCEL: no, reject, stop, cancel
-- PROVIDE_INFO: giving name, age, language, or just a number when asked for quantity
-- TRACK_ORDER: where is my order
-- COMPLAINT: angry, frustrated, need human
 
 Output ONLY valid JSON.
 """
