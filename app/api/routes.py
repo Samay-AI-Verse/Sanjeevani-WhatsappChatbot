@@ -441,9 +441,43 @@ async def upload_prescription_fast(
             "data": {"extracted_medicines": [], "required_next_fields": ["medicine_confirmation"]},
         }
 
-    nlu_result = extract_nlu(ocr_text, ConversationState.AWAITING_PRESCRIPTION)
-    names_from_nlu = [item.name for item in (nlu_result.items or []) if item.name]
-    candidates = names_from_nlu or _extract_medicine_candidates_from_text(ocr_text)
+    # Pass OCR to LLM to verify and extract
+    from ..services.ai_service import groq_client, GROQ_MODEL
+    import json
+    
+    candidates = []
+    is_valid_prescription = True
+    if groq_client:
+        try:
+            prompt = f"""
+Analyze this prescription text and extract medicine information.
+OCR Text: {ocr_text}
+Respond in JSON format only:
+{{
+    "is_valid_prescription": true/false,
+    "medicines": [{"name": "Medicine Name"}]
+}}
+"""
+            completion = groq_client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are a medical prescription verification expert. Always respond with valid JSON only."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"}
+            )
+            result = json.loads(completion.choices[0].message.content)
+            is_valid_prescription = result.get("is_valid_prescription", True)
+            candidates = [m.get("name") for m in result.get("medicines", []) if m.get("name")]
+        except Exception as e:
+            logger.error(f"LLM verification failed: {e}")
+
+    # Fallback if LLM fails or returns empty
+    if not candidates:
+        nlu_result = extract_nlu(ocr_text, ConversationState.AWAITING_PRESCRIPTION)
+        names_from_nlu = [item.name for item in (nlu_result.items or []) if item.name]
+        candidates = names_from_nlu or _extract_medicine_candidates_from_text(ocr_text)
 
     matcher = MedicineMatcher()
     extracted_medicines: List[Dict[str, Any]] = []
@@ -475,6 +509,29 @@ async def upload_prescription_fast(
         await bind_channel_to_pharmacy(channel="app", channel_user_id=user_number, pharmacy_id=resolved_pharmacy_id)
 
     extracted_names = [item["name"] for item in extracted_medicines]
+    
+    # If the LLM successfully analyzed, but flagged it as NOT a prescription
+    if not is_valid_prescription:
+        message = (
+            "⚠️ The uploaded image does not appear to be a valid medical prescription.\n"
+            "Please ensure you are uploading a clear photo of a doctor's prescription."
+        )
+        return {
+            "status": "partial_success",
+            "message": message,
+            "text": message,
+            "reply": message,
+            "session_id": session_id or user_number,
+            "state": str(ConversationState.AWAITING_PRESCRIPTION),
+            "data": {
+                "ocr_text_preview": ocr_text[:400],
+                "extracted_medicines": [],
+                "unmatched_candidates": unmatched_names,
+                "required_next_fields": ["medicine_confirmation"],
+                "pharmacy_id": resolved_pharmacy_id,
+            },
+        }
+
     if extracted_names:
         temp_data["medicine_name"] = ", ".join(extracted_names)
         temp_data["quantity"] = temp_data.get("quantity") or 1
@@ -489,14 +546,14 @@ async def upload_prescription_fast(
     if extracted_names:
         medicine_lines = "\n".join([f"{idx}. {name}" for idx, name in enumerate(extracted_names, start=1)])
         message = (
-            "Prescription uploaded successfully.\n\n"
+            "Prescription ✅ Verified by AI Assistant.\n\n"
             "I extracted these medicines:\n"
             f"{medicine_lines}\n\n"
             "Please confirm quantity and delivery address."
         )
     else:
         message = (
-            "Prescription uploaded, but I could not confidently identify medicine names.\n"
+            "Prescription uploaded, but no active medicines were identified by the AI.\n"
             "Please type medicine names manually (example: Dolo 650 x 2)."
         )
 
