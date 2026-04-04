@@ -17,14 +17,27 @@ def _build_order_summary(temp_data: Dict) -> str:
     findings = temp_data.get("agent_findings", {})
     refill_nudge = findings.get("refill_nudge", "")
     med = temp_data.get("medicine_name")
-    qty = temp_data.get("quantity")
+    qty = int(temp_data.get("quantity") or 1)
     
-    # Calculate price based on item rows (mock or real from agent)
+    # Keep tablet-level estimate in a small, consumer-friendly range for chat.
+    default_unit_price = 12.0
+    max_chat_unit_price = 30.0
+
     stock_rows = findings.get("items") or []
     total = 0
     for row in stock_rows:
-        total += int(row.get("requested_qty", 1)) * float(row.get("price", 250.0))
-    if total == 0: total = int(qty or 1) * 250
+        row_qty = int(row.get("requested_qty", 1) or 1)
+        raw_price = row.get("price", row.get("unit_price", row.get("mrp", default_unit_price)))
+        try:
+            unit_price = float(raw_price)
+        except (TypeError, ValueError):
+            unit_price = default_unit_price
+        unit_price = max(5.0, min(unit_price, max_chat_unit_price))
+        total += row_qty * unit_price
+
+    if total == 0:
+        total = qty * default_unit_price
+    total = int(round(total))
         
     summary = f"✨ *Order Summary* ✨\n--------------------------\n💊 *Medicine:* {med}\n📊 *Quantity:* {qty}\n💰 *Estimated Price:* ₹{total}\n🚚 *Delivery:* Home Delivery\n--------------------------\n"
     if refill_nudge:
